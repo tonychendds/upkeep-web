@@ -93,8 +93,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
     }
     const items = [
       ["#/summary", "summary", "Summary", "summary"],
-      ["#/house", "house", "House", "house"],
       ["#/car", "car", "Car", "car"],
+      ["#/house", "house", "House", "house"],
       ["#/more", "more", "More", "more"],
     ];
     nav.replaceChildren(
@@ -750,8 +750,9 @@ export function mountApp(root, { state, sync, syncUrl }) {
     if (route.id && (!existing || existing.deleted || existing.type !== "asset")) {
       return wrap([el("h1", {}, ["Asset not found"]), el("a", { class: "button secondary", href: "#/assets" }, ["Back to assets"])]);
     }
+    const addingCar = !existing && route.preset === "car";
     const payload = existing?.payload || { assetType: route.preset === "home" ? "home" : "car", name: "" };
-    let assetType = payload.assetType === "home" ? "home" : "car";
+    let assetType = addingCar || payload.assetType !== "home" ? "car" : "home";
     const name = input("text", payload.assetType === "home" ? payload.name || "" : "", { maxlength: "80" });
     const make = input("text", payload.make || "", { maxlength: "40", placeholder: "Lexus", autocapitalize: "words" });
     const model = input("text", payload.model || "", { maxlength: "40", placeholder: "RX" });
@@ -806,12 +807,15 @@ export function mountApp(root, { state, sync, syncUrl }) {
 
     const form = el("form", { id: "asset-form", class: "stack" });
     form.append(
-      error,
-      existing ? el("p", { class: "meta" }, [assetType === "car" ? "Car" : "Home"]) : el("div", { class: "segment" }, [homeButton, carButton]),
-      preview,
-      homeFields,
-      carFields,
-      el("button", { type: "submit", class: "button" }, ["Save asset"]),
+      ...[
+        error,
+        existing ? el("p", { class: "meta" }, [assetType === "car" ? "Car" : "Home"]) : addingCar ? null : el("div", { class: "segment" }, [homeButton, carButton]),
+        addingCar ? null : preview,
+        homeFields,
+        carFields,
+        el("button", { type: "submit", class: "button" }, [addingCar ? "Add car" : "Save asset"]),
+        addingCar ? el("button", { type: "button", class: "button secondary", onClick: () => go("#/car") }, ["Cancel"]) : null,
+      ].filter(Boolean),
     );
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -840,8 +844,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
     });
 
     const page = wrap([
-      el("h1", {}, [existing ? (assetType === "car" ? "Car details" : "Home") : "Add asset"]),
-      el("p", { class: "lede" }, [assetType === "car" || !existing ? "Brand, model, year, and plate build the name. A nickname replaces it." : "Rename this home, or delete it if you don't need it."]),
+      el("h1", {}, [existing ? (assetType === "car" ? "Car details" : "Home") : addingCar ? "Add car" : "Add asset"]),
+      addingCar ? null : el("p", { class: "lede" }, [assetType === "car" || !existing ? "Brand, model, year, and plate build the name. A nickname replaces it." : "Rename this home, or delete it if you don't need it."]),
       form,
     ]);
     if (existing) {

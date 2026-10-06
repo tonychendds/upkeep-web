@@ -8,7 +8,7 @@ Live site (after Pages is enabled): https://tonychendds.github.io/upkeep-web/
 
 - Assets: the home, plus cars. A car stores brand, model, year, license plate, and an optional VIN. The display name defaults to something like `2019 Lexus RX · 8ABC123`. A nickname replaces that name without erasing the details.
 - Jobs: what was done, where, contractor, cost, status (Scheduled or Done), the date, an optional next due date, and a repeat (every 3 months, 6 months, 1 year, a custom number of months, or miles for a car). Marking a job done suggests the next due date from the interval. Cars can store an odometer.
-- House and Car: each tab shows that asset's details, upcoming work (overdue highlighted), its jobs, and spending for the current month and year. The car tab can switch between cars. Summary and More stay in the tab bar. All upcoming and All jobs remain under More.
+- Car and House: the tab bar is Summary, Car, House, More. Each asset tab shows details, upcoming work (overdue highlighted), that asset's jobs, and spending for the current month and year. The car tab can switch between cars. Adding a car asks only for the car fields; the display name is still built from the year, brand, model, and plate, or from a nickname. All upcoming and All jobs remain under More.
 - Summary: monthly and yearly totals by asset and category. Only Done jobs are counted.
 - Contractors: name, phone, email, and total spent on completed jobs.
 - JSON backup and import. Import merges by record id and asks before combining. CSV export is included.
