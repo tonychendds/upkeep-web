@@ -155,7 +155,7 @@ try {
   await pageA.screenshot({ path: path.join(shots, "iphone_job_form.png") });
   await saveAndSync(pageA, "Save job");
   await pageA.getByRole("heading", { name: "Car", exact: true }).waitFor();
-  await pageA.getByRole("button", { name: /Oil change/ }).waitFor();
+  await pageA.getByTestId("asset-job-list").getByRole("button", { name: /Oil change/ }).waitFor();
   assert.equal(await pageA.getByTestId("car-month-total").innerText(), "$89.50");
   assert.equal(await pageA.getByTestId("car-year-total").innerText(), "$89.50");
 
@@ -219,7 +219,7 @@ try {
   assert.equal(await pageB.getByLabel("License plate").inputValue(), "8ABC123");
   assert.equal(await pageB.getByLabel("VIN").inputValue(), vin);
   await pageB.getByRole("link", { name: "Car", exact: true }).click();
-  await pageB.getByRole("button", { name: /Oil change/ }).click();
+  await pageB.getByTestId("asset-job-list").getByRole("button", { name: /Oil change/ }).click();
   await pageB.getByLabel("Cost").fill("100");
   await saveAndSync(pageB, "Save job");
 
@@ -229,7 +229,7 @@ try {
   await pageA.getByTestId("month-total").getByText("$100.00").waitFor({ timeout: 10000 });
 
   await pageB.getByRole("link", { name: "Car", exact: true }).click();
-  await pageB.getByRole("button", { name: /Oil change/ }).click();
+  await pageB.getByTestId("asset-job-list").getByRole("button", { name: /Oil change/ }).click();
   await pageB.getByRole("button", { name: "Delete job" }).click();
   await pageB.getByRole("dialog").getByRole("button", { name: "Delete job" }).click();
   await pageB.waitForResponse((response) => response.url().endsWith("/sync") && response.ok());
