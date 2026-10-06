@@ -50,6 +50,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       renderBanner();
       renderNav();
       renderMain();
+      window.scrollTo(0, 0);
     });
   }
 
@@ -108,7 +109,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
       more: () => renderMore(),
     }[route.name];
     main.replaceChildren(view ? view() : renderSummary());
-    main.focus?.();
+    // preventScroll: focusing <main> otherwise scrolls the page heading under the sticky header on phones.
+    main.focus?.({ preventScroll: true });
   }
 
   function renderData() {
