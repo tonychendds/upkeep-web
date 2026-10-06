@@ -275,14 +275,14 @@ export function mountApp(root, { state, sync, syncUrl }) {
       ]);
     }
     const home = homes.find((asset) => asset.id === route.id) || homes[0];
-    const parts = [el("h1", {}, ["House"])];
+    const parts = [
+      el("div", { class: "page-head" }, [
+        el("h1", {}, ["House"]),
+        el("a", { class: "text-link", href: `#/assets/${home.id}` }, ["Edit home"]),
+      ]),
+    ];
     if (homes.length > 1) parts.push(assetPicker("Home", "home-picker", homes, home.id, (id) => { location.hash = `#/house/${id}`; }));
     parts.push(
-      el("section", { class: "card stack", "data-testid": "house-details" }, [
-        el("h2", { "data-testid": "house-name" }, [home.payload.name || "Home"]),
-        el("p", { class: "meta" }, ["Home"]),
-        el("a", { class: "button secondary", href: `#/assets/${home.id}` }, ["Edit home"]),
-      ]),
       el("h2", {}, ["Upcoming"]),
       upcomingStack(itemsForAsset(home.id), "Nothing scheduled for this home, and no next-due dates yet."),
       el("h2", {}, ["Jobs"]),
@@ -436,7 +436,13 @@ export function mountApp(root, { state, sync, syncUrl }) {
     const odometer = input("text", payload.odometer ?? "", { inputmode: "numeric", placeholder: "Miles" });
     const notes = el("textarea", { maxlength: "4000" }, [payload.notes || ""]);
     const repeat = el("select");
-    const customRepeat = input("number", payload.repeat && !["3", "6", "12"].includes(String(payload.repeat.every)) ? String(payload.repeat.every) : "", { min: "1", inputmode: "numeric" });
+    const customRepeat = input(
+      "number",
+      payload.repeat && !["3", "6", "12"].includes(String(payload.repeat.every)) ? String(payload.repeat.every) : "",
+      { min: "1", step: "1", inputmode: "numeric", placeholder: "Months" },
+    );
+    const customWrap = labeled("How many", customRepeat);
+    customWrap.hidden = true;
     const newCategory = input("text", "", { maxlength: "80" });
     const contractorName = input("text", "", { maxlength: "80" });
     const contractorPhone = input("tel", "", { maxlength: "40" });
@@ -444,7 +450,6 @@ export function mountApp(root, { state, sync, syncUrl }) {
     const newCategoryWrap = el("div", { class: "field" });
     const newContractorWrap = el("div", { class: "stack" });
     const odometerWrap = el("div", { class: "field" });
-    const customWrap = el("div", { class: "field" });
     const hint = el("p", { class: "hint" });
     const error = el("div", { class: "flash error", hidden: true, role: "alert" });
     const doneButton = el("button", { type: "button" }, ["Done"]);
@@ -510,7 +515,14 @@ export function mountApp(root, { state, sync, syncUrl }) {
       else if (!preferred && stored?.unit === "miles" && selectedType() === "car") preferred = "miles:custom";
       if (![...repeat.options].some((option) => option.value === preferred)) preferred = "";
       repeat.value = preferred || "";
-      customWrap.hidden = repeat.value !== "months:custom" && repeat.value !== "miles:custom";
+      showCustomRepeat(false);
+    }
+
+    function showCustomRepeat(scroll) {
+      const custom = repeat.value === "months:custom" || repeat.value === "miles:custom";
+      customWrap.hidden = !custom;
+      customRepeat.placeholder = repeat.value === "miles:custom" ? "Miles" : "Months";
+      if (custom && scroll) customRepeat.scrollIntoView({ block: "nearest" });
     }
 
     function readRepeat() {
@@ -518,8 +530,11 @@ export function mountApp(root, { state, sync, syncUrl }) {
       if (repeat.value === "months:3") return { unit: "months", every: 3 };
       if (repeat.value === "months:6") return { unit: "months", every: 6 };
       if (repeat.value === "months:12") return { unit: "months", every: 12 };
-      const every = Number(customRepeat.value);
-      if (!Number.isInteger(every) || every < 1) return undefined;
+      if (repeat.value !== "months:custom" && repeat.value !== "miles:custom") return null;
+      const raw = customRepeat.value.trim();
+      if (!/^\d+$/.test(raw)) return undefined;
+      const every = Number(raw);
+      if (!Number.isSafeInteger(every) || every < 1) return undefined;
       return { unit: repeat.value === "miles:custom" ? "miles" : "months", every };
     }
 
@@ -533,7 +548,11 @@ export function mountApp(root, { state, sync, syncUrl }) {
         const suggested = suggestNextDue(date.value, interval) || addMonths(date.value, interval.every);
         if (suggested) nextDue.value = suggested;
       }
-      if (status === "done" && interval?.unit === "miles") {
+      if ((repeat.value === "months:custom" || repeat.value === "miles:custom") && interval === undefined) {
+        hint.textContent = repeat.value === "miles:custom"
+          ? "Enter how many miles between visits."
+          : "Enter how many months. The next due date uses that number.";
+      } else if (status === "done" && interval?.unit === "miles") {
         const miles = Number(odometer.value);
         hint.textContent = Number.isInteger(miles) && miles >= 0 && odometer.value.trim()
           ? `Next due around ${(miles + interval.every).toLocaleString("en-US")} miles. You can also set a date.`
@@ -560,7 +579,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
     categorySelect.addEventListener("change", () => { newCategoryWrap.hidden = categorySelect.value !== "__new"; });
     contractorSelect.addEventListener("change", () => { newContractorWrap.hidden = contractorSelect.value !== "__new"; });
     repeat.addEventListener("change", () => {
-      customWrap.hidden = repeat.value !== "months:custom" && repeat.value !== "miles:custom";
+      showCustomRepeat(true);
       refreshStatus();
     });
     doneButton.addEventListener("click", () => { status = "done"; refreshStatus(); });
@@ -579,13 +598,15 @@ export function mountApp(root, { state, sync, syncUrl }) {
       labeled("Email", contractorEmail),
     );
     odometerWrap.append(labeled("Odometer", odometer));
-    customWrap.append(el("label", {}, ["How many"]), customRepeat);
 
-    const form = el("form", { id: "job-form", class: "stack" });
+    const assetField = labeled("Asset", assetSelect);
+    const lockAsset = !existing && route.assetId && assets.some((asset) => asset.id === route.assetId);
+    if (lockAsset) assetField.hidden = true;
+    const form = el("form", { id: "job-form", class: "stack", novalidate: true });
     form.append(
       error,
       labeled("What was done", title),
-      labeled("Asset", assetSelect),
+      assetField,
       labeled("Category", categorySelect),
       newCategoryWrap,
       labeled("Where", where),
@@ -637,7 +658,10 @@ export function mountApp(root, { state, sync, syncUrl }) {
       const costCents = parseMoney(cost.value);
       if (costCents === undefined) return showError("Enter the cost in dollars, like 89.50, or leave it blank.");
       const interval = readRepeat();
-      if (interval === undefined) return showError("Enter how often this repeats.");
+      if (interval === undefined) {
+        const custom = repeat.value === "months:custom" || repeat.value === "miles:custom";
+        return showError(custom ? "Enter how many as a whole number, at least 1." : "Enter how often this repeats.");
+      }
       let miles = null;
       if (assetType === "car" && odometer.value.trim()) {
         if (!/^\d+$/.test(odometer.value.trim())) return showError("Odometer should be a whole number of miles.");
