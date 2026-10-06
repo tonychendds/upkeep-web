@@ -33,6 +33,7 @@ import { confirmPasswordReset, fetchAccount, loginAccount, logoutAccount, regist
 
 const FORM_ROUTES = new Set(["job", "asset", "contractor"]);
 const jobsFilter = { query: "", assetId: "", status: "", categoryId: "" };
+const assetJobFilters = new Map();
 let summaryMonth = currentMonth();
 let accountMode = "signin";
 
@@ -82,11 +83,18 @@ export function mountApp(root, { state, sync, syncUrl }) {
   }
 
   function renderNav() {
-    const current = navKey(parseRoute(location.hash));
+    const route = parseRoute(location.hash);
+    let current = activeNav(route);
+    if (route.name === "job") {
+      const assetId = (route.id && state.records[route.id]?.payload?.assetId) || route.assetId;
+      const type = assetId && state.records[assetId]?.payload?.assetType;
+      if (type === "home") current = "house";
+      else if (type === "car") current = "car";
+    }
     const items = [
       ["#/summary", "summary", "Summary", "summary"],
-      ["#/upcoming", "upcoming", "Upcoming", "upcoming"],
-      ["#/jobs", "jobs", "Jobs", "jobs"],
+      ["#/house", "house", "House", "house"],
+      ["#/car", "car", "Car", "car"],
       ["#/more", "more", "More", "more"],
     ];
     nav.replaceChildren(
@@ -103,6 +111,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
     main.dataset.screen = route.name;
     const view = {
       summary: () => renderSummary(),
+      house: () => renderHouse(route),
+      car: () => renderCar(route),
       upcoming: () => renderUpcoming(),
       jobs: () => renderJobs(),
       job: () => renderJob(route),
@@ -114,7 +124,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       reset: () => renderReset(route),
       more: () => renderMore(),
     }[route.name];
-    const key = [route.name, route.id || "", route.token || "", route.markDone ? "1" : "", accountMode, state.flash?.text || ""].join("\0");
+    const key = [route.name, route.id || "", route.assetId || "", route.preset || "", route.token || "", route.markDone ? "1" : "", accountMode, state.flash?.text || ""].join("\0");
     const resetScroll = key !== shownKey;
     shownKey = key;
     main.replaceChildren(view ? view() : renderSummary());
@@ -171,7 +181,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       ? items.map((item) => upcomingCard(item))
       : [el("div", { class: "panel" }, [el("p", { class: "lede" }, ["Nothing scheduled, and no next-due dates yet."])])];
     return wrap([
-      el("h1", {}, ["Upcoming"]),
+      el("h1", {}, ["All upcoming"]),
       el("p", { class: "lede" }, ["Scheduled jobs and the next time a finished job comes due. Overdue items are highlighted."]),
       el("div", { id: "upcoming-list", class: "stack" }, list),
       el("a", { class: "button", href: "#/jobs/new" }, [icon("plus"), "Log a job"]),
@@ -226,7 +236,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
     categorySelect.addEventListener("change", () => { jobsFilter.categoryId = categorySelect.value; refill(); });
     refill();
     return wrap([
-      el("h1", {}, ["Jobs"]),
+      el("h1", {}, ["All jobs"]),
       el("a", { class: "button", href: "#/jobs/new" }, [icon("plus"), "Log a job"]),
       el("div", { class: "filters" }, [
         labeled("Search", query),
@@ -251,6 +261,152 @@ export function mountApp(root, { state, sync, syncUrl }) {
       el("span", { class: "meta" }, [`${formatDate(payload.date)} · ${assetLabel(state.records, payload.assetId)} · ${categoryLabel(state.records, payload.categoryId)}`]),
       el("span", {}, [cost]),
     ]);
+  }
+
+  function renderHouse(route) {
+    const homes = assetChoices().filter((asset) => asset.payload.assetType === "home");
+    if (!homes.length) {
+      return wrap([
+        el("h1", {}, ["House"]),
+        el("div", { class: "panel", "data-testid": "house-empty" }, [
+          el("p", { class: "lede" }, ["No home yet. Add one to track jobs, upcoming work, and spending."]),
+        ]),
+        el("a", { class: "button", href: "#/assets/new/home" }, [icon("plus"), "Add a home"]),
+      ]);
+    }
+    const home = homes.find((asset) => asset.id === route.id) || homes[0];
+    const parts = [el("h1", {}, ["House"])];
+    if (homes.length > 1) parts.push(assetPicker("Home", "home-picker", homes, home.id, (id) => { location.hash = `#/house/${id}`; }));
+    parts.push(
+      el("section", { class: "card stack", "data-testid": "house-details" }, [
+        el("h2", { "data-testid": "house-name" }, [home.payload.name || "Home"]),
+        el("p", { class: "meta" }, ["Home"]),
+        el("a", { class: "button secondary", href: `#/assets/${home.id}` }, ["Edit home"]),
+      ]),
+      el("h2", {}, ["Upcoming"]),
+      upcomingStack(itemsForAsset(home.id), "Nothing scheduled for this home, and no next-due dates yet."),
+      el("h2", {}, ["Jobs"]),
+      el("a", { class: "button", href: `#/jobs/new/${home.id}` }, [icon("plus"), "Log a job"]),
+      scopedJobBrowser(home),
+      spendingBlock(home.id, "Completed jobs for this home.", "house-month-total", "house-year-total"),
+    );
+    return wrap(parts);
+  }
+
+  function renderCar(route) {
+    const cars = assetChoices().filter((asset) => asset.payload.assetType === "car");
+    if (!cars.length) {
+      return wrap([
+        el("h1", {}, ["Car"]),
+        el("div", { class: "panel", "data-testid": "car-empty" }, [
+          el("p", { class: "lede" }, ["No cars yet. Add one to track service, upcoming work, and spending."]),
+        ]),
+        el("a", { class: "button", href: "#/assets/new/car" }, [icon("plus"), "Add car"]),
+      ]);
+    }
+    const car = cars.find((asset) => asset.id === route.id) || cars[0];
+    const payload = car.payload;
+    const parts = [el("h1", {}, ["Car"])];
+    if (cars.length > 1) {
+      parts.push(assetPicker("Car", "car-picker", cars, car.id, (id) => { location.hash = `#/car/${id}`; }));
+      parts.push(el("a", { class: "button secondary", href: "#/assets/new/car" }, [icon("plus"), "Add car"]));
+    }
+    parts.push(
+      el("section", { class: "card stack", "data-testid": "car-details" }, [
+        el("h2", { "data-testid": "car-name" }, [payload.name || "Car"]),
+        el("p", { class: "meta" }, [assetSubtitle(payload)]),
+        detailList([
+          ["Brand", payload.make, "car-brand"],
+          ["Model", payload.model, "car-model"],
+          ["Year", payload.year, "car-year"],
+          ["Plate", payload.plate, "car-plate"],
+          ["VIN", payload.vin, "car-vin"],
+          ["Nickname", payload.nickname, "car-nickname"],
+        ]),
+        el("a", { class: "button secondary", href: `#/assets/${car.id}` }, ["Edit car"]),
+      ]),
+      el("h2", {}, ["Upcoming"]),
+      upcomingStack(itemsForAsset(car.id), "Nothing scheduled for this car, and no next-due dates yet."),
+      el("h2", {}, ["Jobs"]),
+      el("a", { class: "button", href: `#/jobs/new/${car.id}` }, [icon("plus"), "Log a job"]),
+      scopedJobBrowser(car),
+      spendingBlock(car.id, "Completed jobs for this car.", "car-month-total", "car-year-total"),
+    );
+    if (cars.length === 1) parts.push(el("a", { class: "button secondary", href: "#/assets/new/car" }, [icon("plus"), "Add car"]));
+    return wrap(parts);
+  }
+
+  function assetPicker(label, testid, assets, selected, onChange) {
+    const picker = selectFrom(assets.map((asset) => [asset.id, asset.payload.name]), selected);
+    picker.setAttribute("data-testid", testid);
+    picker.addEventListener("change", () => onChange(picker.value));
+    return labeled(label, picker);
+  }
+
+  function itemsForAsset(assetId) {
+    return upcomingItems(state.records).filter((item) => item.job.payload?.assetId === assetId);
+  }
+
+  function upcomingStack(items, empty) {
+    const list = items.length
+      ? items.map((item) => upcomingCard(item))
+      : [el("div", { class: "panel" }, [el("p", { class: "lede" }, [empty])])];
+    return el("div", { class: "stack" }, list);
+  }
+
+  function spendingBlock(assetId, lede, monthTest, yearTest) {
+    const month = currentMonth();
+    const totals = summarize(state.records, month);
+    const row = totals.assets.find((asset) => asset.id === assetId) || { monthCents: 0, yearCents: 0 };
+    return el("section", { class: "stack" }, [
+      el("h2", {}, ["Spending"]),
+      el("p", { class: "lede" }, [lede]),
+      el("div", { class: "figures" }, [
+        figure(formatMonth(month), formatMoney(row.monthCents), monthTest),
+        figure(month.slice(0, 4), formatMoney(row.yearCents), yearTest),
+      ]),
+    ]);
+  }
+
+  function scopedJobBrowser(asset) {
+    const filters = assetJobFilters.get(asset.id) || { query: "", status: "", categoryId: "" };
+    assetJobFilters.set(asset.id, filters);
+    const categories = categoriesFor(state.records, asset.payload.assetType);
+    const query = el("input", {
+      type: "search",
+      placeholder: "Search title, place, notes, contractor",
+      value: filters.query,
+    });
+    const statusSelect = selectFrom([["", "All statuses"], ["done", "Done"], ["scheduled", "Scheduled"]], filters.status);
+    const categorySelect = selectFrom([["", "All categories"], ...categories.map((category) => [category.id, category.name])], filters.categoryId);
+    const list = el("div", { class: "stack", "data-testid": "asset-job-list" });
+    const refill = () => {
+      const jobs = filterJobs(state.records, { ...filters, assetId: asset.id });
+      list.replaceChildren(
+        ...(jobs.length
+          ? jobs.map((job) => jobCard(job))
+          : [el("div", { class: "panel" }, [el("p", { class: "lede" }, ["No jobs match."])])]),
+      );
+    };
+    query.addEventListener("input", () => { filters.query = query.value; refill(); });
+    statusSelect.addEventListener("change", () => { filters.status = statusSelect.value; refill(); });
+    categorySelect.addEventListener("change", () => { filters.categoryId = categorySelect.value; refill(); });
+    refill();
+    return el("div", { class: "stack" }, [
+      el("div", { class: "filters" }, [
+        labeled("Search", query),
+        labeled("Status filter", statusSelect),
+        labeled("Category filter", categorySelect),
+      ]),
+      list,
+    ]);
+  }
+
+  function sectionForAsset(assetId) {
+    const type = state.records[assetId]?.payload?.assetType;
+    if (type === "car") return `#/car/${assetId}`;
+    if (type === "home") return `#/house/${assetId}`;
+    return "#/jobs";
   }
 
   function renderJob(route) {
@@ -310,7 +466,10 @@ export function mountApp(root, { state, sync, syncUrl }) {
 
     function fillAssets() {
       assetSelect.replaceChildren(...assets.map((asset) => new Option(asset.payload.name, asset.id)));
-      const preferred = payload.assetId && assets.some((asset) => asset.id === payload.assetId) ? payload.assetId : assets[0].id;
+      const fromRoute = route.assetId && assets.some((asset) => asset.id === route.assetId) ? route.assetId : "";
+      const preferred = payload.assetId && assets.some((asset) => asset.id === payload.assetId)
+        ? payload.assetId
+        : fromRoute || assets[0].id;
       assetSelect.value = preferred;
     }
 
@@ -509,7 +668,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       if (problem) return showError(problem);
       saveRecord(state, job);
       sync.schedule();
-      go("#/jobs");
+      go(sectionForAsset(assetId));
     });
 
     const extra = [];
@@ -566,7 +725,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
     if (!ok) return;
     deleteRecord(state, job.id);
     sync.schedule();
-    go("#/jobs");
+    go(sectionForAsset(job.payload?.assetId));
   }
 
   function renderAssets() {
@@ -591,7 +750,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
     if (route.id && (!existing || existing.deleted || existing.type !== "asset")) {
       return wrap([el("h1", {}, ["Asset not found"]), el("a", { class: "button secondary", href: "#/assets" }, ["Back to assets"])]);
     }
-    const payload = existing?.payload || { assetType: "car", name: "" };
+    const payload = existing?.payload || { assetType: route.preset === "home" ? "home" : "car", name: "" };
     let assetType = payload.assetType === "home" ? "home" : "car";
     const name = input("text", payload.assetType === "home" ? payload.name || "" : "", { maxlength: "80" });
     const make = input("text", payload.make || "", { maxlength: "40", placeholder: "Lexus", autocapitalize: "words" });
@@ -676,7 +835,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
       }
       saveRecord(state, record);
       sync.schedule();
-      go("#/assets");
+      if (existing || route.preset) go(record.payload.assetType === "car" ? `#/car/${record.id}` : `#/house/${record.id}`);
+      else go("#/assets");
     });
 
     const page = wrap([
@@ -698,7 +858,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
           if (!ok) return;
           deleteRecord(state, existing.id);
           sync.schedule();
-          go("#/assets");
+          go(existing.payload.assetType === "car" ? "#/car" : "#/house");
         },
       }, ["Delete asset"]));
     }
@@ -1087,6 +1247,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
     return wrap([
       el("h1", {}, ["More"]),
       flashNode(),
+      el("a", { class: "menu-link", href: "#/upcoming" }, ["All upcoming"]),
+      el("a", { class: "menu-link", href: "#/jobs" }, ["All jobs"]),
       el("a", { class: "menu-link", href: "#/assets" }, ["Assets"]),
       el("a", { class: "menu-link", href: "#/contractors" }, ["Contractors"]),
       el("a", { class: "menu-link", href: "#/account" }, ["Account and sync"]),
@@ -1152,6 +1314,15 @@ function shell() {
 
 function wrap(children) {
   return el("div", { class: "wrap" }, children.filter(Boolean));
+}
+
+function detailList(rows) {
+  const list = el("dl", { class: "details" });
+  for (const [label, value, testid] of rows) {
+    const text = value == null || value === "" ? "Not set" : String(value);
+    list.append(el("dt", {}, [label]), el("dd", testid ? { "data-testid": testid } : {}, [text]));
+  }
+  return list;
 }
 
 function figure(label, value, testid) {
@@ -1244,12 +1415,14 @@ function parseRoute(hash) {
   if (reset) return { name: "reset", token: decodeURIComponent(reset[1]) };
   const [head, id, extra] = String(hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
   if (!head || head === "summary") return { name: "summary" };
+  if (head === "house") return { name: "house", id: id || null };
+  if (head === "car") return { name: "car", id: id || null };
   if (head === "upcoming") return { name: "upcoming" };
   if (head === "jobs" && !id) return { name: "jobs" };
-  if (head === "jobs" && id === "new") return { name: "job", id: null };
+  if (head === "jobs" && id === "new") return { name: "job", id: null, assetId: extra || null };
   if (head === "jobs" && id) return { name: "job", id, markDone: extra === "done" };
   if (head === "assets" && !id) return { name: "assets" };
-  if (head === "assets" && id === "new") return { name: "asset", id: null };
+  if (head === "assets" && id === "new") return { name: "asset", id: null, preset: extra === "home" || extra === "car" ? extra : null };
   if (head === "assets" && id) return { name: "asset", id };
   if (head === "contractors" && !id) return { name: "contractors" };
   if (head === "contractors" && id === "new") return { name: "contractor", id: null };
@@ -1259,10 +1432,8 @@ function parseRoute(hash) {
   return { name: "summary" };
 }
 
-function navKey(route) {
-  if (route.name === "summary" || route.name === "upcoming" || route.name === "jobs" || route.name === "job") {
-    return route.name === "job" ? "jobs" : route.name;
-  }
+function activeNav(route) {
+  if (route.name === "summary" || route.name === "house" || route.name === "car") return route.name;
   return "more";
 }
 

@@ -37,6 +37,7 @@ try {
 
   const pointerEvents = await pageA.evaluate(() => getComputedStyle(document.querySelector("nav a svg")).pointerEvents);
   assert.equal(pointerEvents, "none");
+  await assertNav(pageA);
   const icon = await pageA.evaluate(async () => {
     const img = document.querySelector(".brand img");
     await img.decode();
@@ -118,8 +119,18 @@ try {
   assert.equal(await pageA.getByLabel("Year built").inputValue(), "2019");
   assert.equal(await pageA.getByLabel("License plate").inputValue(), "8ABC123");
   assert.equal(await pageA.getByLabel("VIN").inputValue(), vin);
-  await pageA.getByRole("link", { name: "Jobs" }).click();
+  await pageA.getByRole("link", { name: "Car", exact: true }).click();
+  assert.equal(await pageA.getByTestId("car-brand").innerText(), "Lexus");
+  assert.equal(await pageA.getByTestId("car-model").innerText(), "RX");
+  assert.equal(await pageA.getByTestId("car-year").innerText(), "2019");
+  assert.equal(await pageA.getByTestId("car-plate").innerText(), "8ABC123");
+  assert.equal(await pageA.getByTestId("car-vin").innerText(), vin);
+  assert.equal(await pageA.getByTestId("car-nickname").innerText(), "Not set");
+  assert.equal(await pageA.getByTestId("car-month-total").innerText(), "$0.00");
+  assert.equal(await pageA.getByTestId("car-year-total").innerText(), "$0.00");
+  await pageA.screenshot({ path: path.join(shots, "iphone_car.png") });
   await pageA.getByRole("link", { name: "Log a job" }).click();
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "2019 Lexus RX · 8ABC123");
   assert.equal(await pageA.getByLabel("Category", { exact: true }).inputValue(), "");
   assert.equal(await pageA.getByLabel("Category", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "Choose…");
   await pageA.getByLabel("What was done").fill("Oil change");
@@ -143,25 +154,40 @@ try {
   await pageA.getByLabel("Odometer").fill("42000");
   await pageA.screenshot({ path: path.join(shots, "iphone_job_form.png") });
   await saveAndSync(pageA, "Save job");
+  await pageA.getByRole("heading", { name: "Car", exact: true }).waitFor();
+  await pageA.getByRole("button", { name: /Oil change/ }).waitFor();
+  assert.equal(await pageA.getByTestId("car-month-total").innerText(), "$89.50");
+  assert.equal(await pageA.getByTestId("car-year-total").innerText(), "$89.50");
 
+  await pageA.getByRole("link", { name: "House", exact: true }).click();
+  assert.equal(await pageA.getByTestId("house-name").innerText(), "Home");
+  await pageA.getByRole("link", { name: "Edit home" }).waitFor();
+  assert.equal(await pageA.getByTestId("house-month-total").innerText(), "$0.00");
   await pageA.getByRole("link", { name: "Log a job" }).click();
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "Home");
   await pageA.getByLabel("What was done").fill("Gutter cleaning");
   await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "Home" });
   await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Cleaning" });
   await pageA.getByRole("button", { name: "Scheduled", exact: true }).click();
   await pageA.getByLabel("Scheduled date").fill(shiftDays(-40));
   await saveAndSync(pageA, "Save job");
+  await pageA.getByRole("heading", { name: "House", exact: true }).waitFor();
+  await pageA.getByText("Overdue").first().waitFor();
+  await pageA.getByText("Gutter cleaning").first().waitFor();
+  await pageA.screenshot({ path: path.join(shots, "iphone_house.png") });
 
-  await pageA.getByRole("link", { name: "Summary" }).click();
+  await pageA.getByRole("link", { name: "Summary", exact: true }).click();
   assert.equal(await pageA.getByTestId("month-total").innerText(), "$89.50");
   assert.equal(await pageA.getByTestId("year-total").innerText(), "$89.50");
   await pageA.locator("section", { has: pageA.getByRole("heading", { name: "By category" }) }).getByText("Oil change").waitFor();
   await pageA.screenshot({ path: path.join(shots, "iphone_summary_totals.png"), fullPage: true });
-  await pageA.getByRole("link", { name: "Upcoming" }).click();
+  await pageA.getByRole("link", { name: "More", exact: true }).click();
+  await pageA.getByRole("link", { name: "All upcoming" }).click();
   await pageA.getByText("Overdue").first().waitFor();
   await pageA.getByText("Gutter cleaning").first().waitFor();
   await pageA.screenshot({ path: path.join(shots, "iphone_upcoming.png") });
-  await pageA.getByRole("link", { name: "Jobs" }).click();
+  await pageA.getByRole("link", { name: "More", exact: true }).click();
+  await pageA.getByRole("link", { name: "All jobs" }).click();
   await pageA.getByLabel("Search").fill("oil");
   await pageA.getByRole("button", { name: /Oil change/ }).waitFor();
   await pageA.getByLabel("Search").fill("zzzz");
@@ -192,24 +218,25 @@ try {
   await pageB.getByRole("button", { name: /2019 Lexus RX · 8ABC123/ }).click();
   assert.equal(await pageB.getByLabel("License plate").inputValue(), "8ABC123");
   assert.equal(await pageB.getByLabel("VIN").inputValue(), vin);
-  await pageB.getByRole("link", { name: "Jobs" }).click();
+  await pageB.getByRole("link", { name: "Car", exact: true }).click();
   await pageB.getByRole("button", { name: /Oil change/ }).click();
   await pageB.getByLabel("Cost").fill("100");
   await saveAndSync(pageB, "Save job");
 
   await pageA.getByRole("button", { name: "Sync now" }).click();
   await pageA.waitForResponse((response) => response.url().endsWith("/sync") && response.ok());
-  await pageA.getByRole("link", { name: "Summary" }).click();
+  await pageA.getByRole("link", { name: "Summary", exact: true }).click();
   await pageA.getByTestId("month-total").getByText("$100.00").waitFor({ timeout: 10000 });
 
-  await pageB.getByRole("link", { name: "Jobs" }).click();
+  await pageB.getByRole("link", { name: "Car", exact: true }).click();
   await pageB.getByRole("button", { name: /Oil change/ }).click();
   await pageB.getByRole("button", { name: "Delete job" }).click();
   await pageB.getByRole("dialog").getByRole("button", { name: "Delete job" }).click();
   await pageB.waitForResponse((response) => response.url().endsWith("/sync") && response.ok());
   await pageA.getByRole("button", { name: "Sync now" }).click();
   await pageA.waitForResponse((response) => response.url().endsWith("/sync") && response.ok());
-  await pageA.getByRole("link", { name: "Jobs" }).click();
+  await pageA.getByRole("link", { name: "More", exact: true }).click();
+  await pageA.getByRole("link", { name: "All jobs" }).click();
   await pageA.getByRole("button", { name: /Oil change/ }).waitFor({ state: "hidden", timeout: 10000 });
   await pageA.getByText("Gutter cleaning").first().waitFor();
   await pageA.getByRole("button", { name: "Sync now" }).click();
@@ -217,7 +244,8 @@ try {
   assert.equal(await pageA.getByRole("button", { name: /Oil change/ }).count(), 0);
 
   await pageB.reload();
-  await pageB.getByRole("link", { name: "Jobs" }).click();
+  await pageB.getByRole("link", { name: "More", exact: true }).click();
+  await pageB.getByRole("link", { name: "All jobs" }).click();
   await pageB.getByText("Gutter cleaning").first().waitFor();
   assert.equal(await pageB.getByRole("button", { name: /Oil change/ }).count(), 0);
 
@@ -237,13 +265,19 @@ try {
   await pad.getByText(/Signed in as/i).first().waitFor({ timeout: 20000 });
   await assertHeadingClear(pad, "ipad after sign-in");
   await pad.screenshot({ path: path.join(shots, "after_account_ipad.png") });
-  await pad.getByRole("link", { name: "Summary" }).click();
+  await pad.getByRole("link", { name: "Summary", exact: true }).click();
   await pad.getByText("Gutter cleaning").waitFor({ timeout: 15000 }).catch(() => {});
-  await pad.getByRole("link", { name: "Jobs" }).click();
+  await pad.getByRole("link", { name: "House", exact: true }).click();
+  await pad.getByTestId("house-name").waitFor({ timeout: 15000 });
   await pad.getByText("Gutter cleaning").first().waitFor({ timeout: 15000 });
-  await assertHeadingClear(pad, "ipad jobs");
-  for (const name of ["Summary", "Upcoming", "More"]) {
-    await pad.getByRole("link", { name }).click();
+  await assertHeadingClear(pad, "ipad house");
+  await pad.screenshot({ path: path.join(shots, "ipad_house.png") });
+  await pad.getByRole("link", { name: "Car", exact: true }).click();
+  await pad.getByTestId("car-plate").waitFor();
+  await assertHeadingClear(pad, "ipad car");
+  await pad.screenshot({ path: path.join(shots, "ipad_car.png") });
+  for (const name of ["Summary", "House", "Car", "More"]) {
+    await pad.getByRole("link", { name, exact: true }).click();
     await assertHeadingClear(pad, `ipad ${name}`);
   }
   const ipadOverflow = await pad.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -270,11 +304,100 @@ try {
   await wide.getByText(/Signed in as/i).first().waitFor({ timeout: 20000 });
   await assertHeadingClear(wide, "ipad landscape after sign-in");
   await wide.screenshot({ path: path.join(shots, "after_account_ipad_landscape.png") });
-  for (const name of ["Summary", "Upcoming", "Jobs"]) {
-    await wide.getByRole("link", { name }).click();
+  for (const name of ["Summary", "House", "Car", "More"]) {
+    await wide.getByRole("link", { name, exact: true }).click();
     await assertHeadingClear(wide, `ipad landscape ${name}`);
   }
+  await wide.screenshot({ path: path.join(shots, "ipad_landscape_nav.png") });
   await landscape.close();
+
+  await pageA.getByRole("link", { name: "Car", exact: true }).click();
+  await pageA.getByRole("link", { name: "Add car" }).click();
+  await pageA.getByLabel("Brand").fill("Honda");
+  await pageA.getByLabel("Model").fill("Civic");
+  await pageA.getByLabel("Year built").fill("2018");
+  await pageA.getByLabel("License plate").fill("7xyz999");
+  await saveAndSync(pageA, "Save asset");
+  await pageA.getByRole("heading", { name: "Car", exact: true }).waitFor();
+  await pageA.getByTestId("car-picker").waitFor();
+  assert.equal(await pageA.getByTestId("car-plate").innerText(), "7XYZ999");
+  await pageA.getByTestId("car-picker").selectOption({ label: "2019 Lexus RX · 8ABC123" });
+  await pageA.locator("[data-testid=car-plate]", { hasText: "8ABC123" }).waitFor();
+  await pageA.getByTestId("car-picker").selectOption({ label: "2018 Honda Civic · 7XYZ999" });
+  await pageA.locator("[data-testid=car-plate]", { hasText: "7XYZ999" }).waitFor();
+  await pageA.screenshot({ path: path.join(shots, "iphone_car_switch.png") });
+  await pageA.getByRole("link", { name: "Log a job" }).click();
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "2018 Honda Civic · 7XYZ999");
+  await pageA.getByLabel("What was done").fill("Tire rotation");
+  await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Tires" });
+  await pageA.getByLabel("Cost").fill("40");
+  await pageA.getByRole("button", { name: "Done", exact: true }).click();
+  await saveAndSync(pageA, "Save job");
+  await pageA.getByRole("button", { name: /Tire rotation/ }).waitFor();
+  assert.equal(await pageA.getByTestId("car-month-total").innerText(), "$40.00");
+
+  await pageA.getByRole("link", { name: "House", exact: true }).click();
+  await pageA.getByRole("link", { name: "Log a job" }).click();
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "Home");
+  await pageA.getByLabel("What was done").fill("Filter change");
+  await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "HVAC" });
+  await pageA.getByLabel("Cost").fill("25");
+  await pageA.getByRole("button", { name: "Done", exact: true }).click();
+  await saveAndSync(pageA, "Save job");
+  await pageA.getByTestId("house-month-total").getByText("$25.00").waitFor();
+  await pageA.getByTestId("house-year-total").getByText("$25.00").waitFor();
+  await pageA.getByRole("link", { name: "Summary", exact: true }).click();
+  assert.equal(await pageA.getByTestId("month-total").innerText(), "$65.00");
+  assert.equal(await pageA.getByTestId("year-total").innerText(), "$65.00");
+
+  const pixel = await browser.newContext({ ...devices["Pixel 7"] });
+  const phone = await pixel.newPage();
+  await phone.goto(server.pageUrl);
+  await phone.getByRole("link", { name: "More", exact: true }).click();
+  await phone.getByRole("link", { name: "Account and sync" }).click();
+  await phone.getByLabel("Email or username").fill(login);
+  await phone.getByLabel("Password", { exact: true }).fill(password);
+  await phone.getByRole("button", { name: "Sign in" }).click();
+  await phone.getByText(/Signed in as/i).first().waitFor({ timeout: 20000 });
+  await assertNav(phone);
+  await assertHeadingClear(phone, "pixel after sign-in");
+  await phone.getByRole("link", { name: "House", exact: true }).click();
+  await phone.getByTestId("house-name").getByText("Home").waitFor({ timeout: 15000 });
+  await phone.getByText("Filter change").first().waitFor({ timeout: 15000 });
+  await phone.getByText("Gutter cleaning").first().waitFor();
+  await phone.getByTestId("house-month-total").getByText("$25.00").waitFor();
+  await assertHeadingClear(phone, "pixel house");
+  await phone.screenshot({ path: path.join(shots, "pixel_house.png") });
+  await phone.getByRole("link", { name: "Car", exact: true }).click();
+  await phone.getByTestId("car-picker").selectOption({ label: "2019 Lexus RX · 8ABC123" });
+  await phone.locator("[data-testid=car-plate]", { hasText: "8ABC123" }).waitFor();
+  await phone.getByTestId("car-picker").selectOption({ label: "2018 Honda Civic · 7XYZ999" });
+  await phone.locator("[data-testid=car-plate]", { hasText: "7XYZ999" }).waitFor();
+  await phone.getByRole("button", { name: /Tire rotation/ }).waitFor();
+  await assertHeadingClear(phone, "pixel car");
+  await phone.screenshot({ path: path.join(shots, "pixel_car.png") });
+  await phone.getByRole("link", { name: "Summary", exact: true }).click();
+  assert.equal(await phone.getByTestId("month-total").innerText(), "$65.00");
+  await phone.screenshot({ path: path.join(shots, "pixel_summary.png") });
+  await pixel.close();
+
+  const blank = await browser.newContext({ ...devices["iPhone 13"] });
+  const empty = await blank.newPage();
+  await empty.goto(server.pageUrl);
+  await assertNav(empty);
+  await empty.getByRole("link", { name: "More", exact: true }).click();
+  await empty.getByRole("link", { name: "Assets", exact: true }).click();
+  await empty.getByRole("button", { name: /^Home/ }).click();
+  await empty.getByRole("button", { name: "Delete asset" }).click();
+  await empty.getByRole("dialog").getByRole("button", { name: "Delete asset" }).click();
+  await empty.getByTestId("house-empty").waitFor();
+  await empty.getByRole("link", { name: "Add a home" }).waitFor();
+  await empty.screenshot({ path: path.join(shots, "iphone_house_empty.png") });
+  await empty.getByRole("link", { name: "Car", exact: true }).click();
+  await empty.getByTestId("car-empty").waitFor();
+  await empty.getByRole("link", { name: "Add car" }).waitFor();
+  await empty.screenshot({ path: path.join(shots, "iphone_car_empty.png") });
+  await blank.close();
 
   await pageA.getByRole("link", { name: "More" }).click();
   await pageA.getByRole("link", { name: "Account and sync" }).click();
@@ -312,10 +435,10 @@ try {
   assert.equal(new URL(pageB.url()).hash, "#/account");
   const signedInIconAfterReset = await pageB.evaluate(() => getComputedStyle(document.querySelector("#sync-banner svg")).pointerEvents);
   assert.equal(signedInIconAfterReset, "none");
-  await pageB.getByRole("link", { name: "Jobs" }).click();
+  await pageB.getByRole("link", { name: "House", exact: true }).click();
   await pageB.getByText("Gutter cleaning").first().waitFor({ timeout: 15000 });
 
-  await pageA.getByRole("link", { name: "Jobs" }).click();
+  await pageA.getByRole("link", { name: "House", exact: true }).click();
   await pageA.getByText("Gutter cleaning").first().waitFor();
   const oldSession = await pageA.evaluate(async () => {
     const session = JSON.parse(localStorage.getItem("upkeep.session.v1") || "null");
@@ -360,6 +483,14 @@ try {
 } finally {
   await browser.close();
   await server.stop();
+}
+
+async function assertNav(page) {
+  const labels = await page.locator("#nav a").allTextContents();
+  assert.deepEqual(labels.map((text) => text.replace(/\s+/g, " ").trim()), ["Summary", "House", "Car", "More"]);
+  assert.equal(await page.locator("#nav a svg").count(), 4);
+  const paths = await page.locator("#nav a svg path").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("d")));
+  assert.equal(new Set(paths).size, paths.length);
 }
 
 async function assertHeadingClear(page, label) {

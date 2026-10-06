@@ -199,6 +199,18 @@ h2 { font-size: 22px; }
 .rowline:first-child { border-top: 0; padding-top: 0; }
 .rowline strong { font-variant-numeric: tabular-nums; }
 
+.details {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.details dt { color: var(--muted); }
+.details dd { margin: 0; overflow-wrap: anywhere; }
+
+.picker-row { display: flex; flex-direction: column; gap: 8px; }
+
 .nav {
   flex: none;
   z-index: 6;
