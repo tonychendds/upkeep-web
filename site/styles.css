@@ -19,14 +19,18 @@
   --shadow: 0 1px 0 rgba(36, 28, 20, 0.05);
   --serif: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
   --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
-  --nav-h: calc(64px + env(safe-area-inset-bottom));
 }
 
 * { box-sizing: border-box; }
 
-html, body {
+html, body, #app {
   margin: 0;
-  min-height: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--sans);
@@ -53,12 +57,15 @@ a *,
 img { display: block; max-width: 100%; }
 
 .app {
-  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .top {
-  position: sticky;
-  top: 0;
+  flex: none;
   z-index: 5;
   background: rgba(239, 230, 214, 0.94);
   backdrop-filter: blur(10px);
@@ -75,7 +82,9 @@ img { display: block; max-width: 100%; }
 .brand img {
   width: 40px;
   height: 40px;
+  flex: none;
   border-radius: 10px;
+  object-fit: cover;
 }
 
 .wordmark {
@@ -122,7 +131,15 @@ img { display: block; max-width: 100%; }
 }
 
 .main {
-  padding: 16px 16px calc(var(--nav-h) + 20px);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 16px 24px;
+  overscroll-behavior: contain;
+}
+
+.main:focus {
+  outline: none;
 }
 
 .wrap { display: flex; flex-direction: column; gap: 14px; }
@@ -180,10 +197,7 @@ h2 { font-size: 22px; }
 .rowline strong { font-variant-numeric: tabular-nums; }
 
 .nav {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  flex: none;
   z-index: 6;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -406,16 +420,23 @@ dialog.modal::backdrop { background: rgba(36, 28, 20, 0.45); }
   .app {
     display: grid;
     grid-template-columns: 232px minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    overflow: hidden;
   }
   .top { grid-column: 2; grid-row: 1; }
-  .main { grid-column: 2; grid-row: 2; padding-bottom: 40px; }
+  .main {
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 0;
+    overflow: auto;
+    padding-bottom: 40px;
+  }
   .nav {
-    position: sticky;
-    top: 0;
     grid-column: 1;
     grid-row: 1 / span 2;
-    height: 100dvh;
+    min-height: 0;
+    overflow: auto;
     display: flex;
     flex-direction: column;
     align-items: stretch;
