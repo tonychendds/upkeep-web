@@ -1,0 +1,14 @@
+{
+  "name": "upkeep-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/model.test.mjs && npm test --prefix worker && node tests/e2e.mjs",
+    "test:model": "node --test tests/model.test.mjs",
+    "test:worker": "npm test --prefix worker",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  }
+}
