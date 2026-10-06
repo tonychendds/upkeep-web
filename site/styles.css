@@ -147,6 +147,22 @@ img { display: block; max-width: 100%; }
 
 .wrap { display: flex; flex-direction: column; gap: 14px; }
 
+.page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.text-link {
+  color: var(--green-dark);
+  font-size: 15px;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
 h1, h2 {
   font-family: var(--serif);
   font-weight: 600;

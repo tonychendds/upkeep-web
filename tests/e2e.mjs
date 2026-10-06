@@ -132,18 +132,23 @@ try {
   assert.equal(await pageA.getByTestId("car-month-total").innerText(), "$0.00");
   assert.equal(await pageA.getByTestId("car-year-total").innerText(), "$0.00");
   await pageA.screenshot({ path: path.join(shots, "iphone_car.png") });
+  await pageA.getByRole("link", { name: "Summary", exact: true }).click();
   await pageA.getByRole("link", { name: "Log a job" }).click();
-  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "2019 Lexus RX · 8ABC123");
+  await pageA.getByLabel("Asset", { exact: true }).waitFor();
+  assert.equal(await pageA.getByLabel("Category", { exact: true }).inputValue(), "");
+  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "2019 Lexus RX · 8ABC123" });
+  await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Oil change" });
+  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "Home" });
+  assert.equal(await pageA.getByLabel("Category", { exact: true }).inputValue(), "");
+  await pageA.getByRole("link", { name: "Car", exact: true }).click();
+  await pageA.getByRole("link", { name: "Log a job" }).click();
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).isHidden(), true);
+  await pageA.screenshot({ path: path.join(shots, "after_job_locked_iphone.png") });
   assert.equal(await pageA.getByLabel("Category", { exact: true }).inputValue(), "");
   assert.equal(await pageA.getByLabel("Category", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "Choose…");
   await pageA.getByLabel("What was done").fill("Oil change");
   await pageA.getByRole("button", { name: "Save job" }).click();
   await pageA.getByText("Choose a category.").waitFor();
-  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "2019 Lexus RX · 8ABC123" });
-  await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Oil change" });
-  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "Home" });
-  assert.equal(await pageA.getByLabel("Category", { exact: true }).inputValue(), "");
-  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "2019 Lexus RX · 8ABC123" });
   await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Oil change" });
   await pageA.getByLabel("Where").fill("Dealer");
   await pageA.getByLabel("Contractor", { exact: true }).selectOption({ label: "Add a contractor…" });
@@ -152,7 +157,20 @@ try {
   await pageA.getByLabel("Cost").fill("89.50");
   await pageA.getByRole("button", { name: "Done", exact: true }).click();
   const doneDate = await pageA.getByLabel("Date done").inputValue();
+  await pageA.getByLabel("Repeat").selectOption({ label: "Every… months" });
+  const howMany = pageA.getByLabel("How many");
+  await howMany.waitFor();
+  assert.equal(await howMany.isVisible(), true);
+  assert.equal(await howMany.isEditable(), true);
+  await howMany.fill("4");
+  assert.equal(await pageA.getByLabel("Next due date").inputValue(), addMonths(doneDate, 4));
+  await howMany.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await pageA.screenshot({ path: path.join(shots, "after_repeat_custom_iphone.png") });
+  await howMany.fill("0");
+  await pageA.getByRole("button", { name: "Save job" }).click();
+  await pageA.getByText("Enter how many as a whole number, at least 1.").waitFor();
   await pageA.getByLabel("Repeat").selectOption({ label: "Every 6 months" });
+  assert.equal(await pageA.getByLabel("How many").isHidden(), true);
   assert.equal(await pageA.getByLabel("Next due date").inputValue(), addMonths(doneDate, 6));
   await pageA.getByLabel("Odometer").fill("42000");
   await pageA.screenshot({ path: path.join(shots, "iphone_job_form.png") });
@@ -163,13 +181,14 @@ try {
   assert.equal(await pageA.getByTestId("car-year-total").innerText(), "$89.50");
 
   await pageA.getByRole("link", { name: "House", exact: true }).click();
-  assert.equal(await pageA.getByTestId("house-name").innerText(), "Home");
+  await pageA.getByRole("heading", { name: "House", exact: true }).waitFor();
   await pageA.getByRole("link", { name: "Edit home" }).waitFor();
+  assert.equal(await pageA.getByTestId("house-details").count(), 0);
+  await pageA.screenshot({ path: path.join(shots, "after_house_iphone.png") });
   assert.equal(await pageA.getByTestId("house-month-total").innerText(), "$0.00");
   await pageA.getByRole("link", { name: "Log a job" }).click();
-  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "Home");
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).isHidden(), true);
   await pageA.getByLabel("What was done").fill("Gutter cleaning");
-  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "Home" });
   await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Cleaning" });
   await pageA.getByRole("button", { name: "Scheduled", exact: true }).click();
   await pageA.getByLabel("Scheduled date").fill(shiftDays(-40));
@@ -223,6 +242,7 @@ try {
   assert.equal(await pageB.getByLabel("VIN").inputValue(), vin);
   await pageB.getByRole("link", { name: "Car", exact: true }).click();
   await pageB.getByTestId("asset-job-list").getByRole("button", { name: /Oil change/ }).click();
+  await pageB.getByLabel("Asset", { exact: true }).waitFor();
   await pageB.getByLabel("Cost").fill("100");
   await saveAndSync(pageB, "Save job");
 
@@ -271,7 +291,7 @@ try {
   await pad.getByRole("link", { name: "Summary", exact: true }).click();
   await pad.getByText("Gutter cleaning").waitFor({ timeout: 15000 }).catch(() => {});
   await pad.getByRole("link", { name: "House", exact: true }).click();
-  await pad.getByTestId("house-name").waitFor({ timeout: 15000 });
+  await pad.getByRole("link", { name: "Edit home" }).waitFor({ timeout: 15000 });
   await pad.getByText("Gutter cleaning").first().waitFor({ timeout: 15000 });
   await assertHeadingClear(pad, "ipad house");
   await pad.screenshot({ path: path.join(shots, "ipad_house.png") });
@@ -342,7 +362,7 @@ try {
   await pageA.locator("[data-testid=car-plate]", { hasText: "7XYZ999" }).waitFor();
   await pageA.screenshot({ path: path.join(shots, "iphone_car_switch.png") });
   await pageA.getByRole("link", { name: "Log a job" }).click();
-  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "2018 Honda Civic · 7XYZ999");
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).isHidden(), true);
   await pageA.getByLabel("What was done").fill("Tire rotation");
   await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Tires" });
   await pageA.getByLabel("Cost").fill("40");
@@ -353,7 +373,7 @@ try {
 
   await pageA.getByRole("link", { name: "House", exact: true }).click();
   await pageA.getByRole("link", { name: "Log a job" }).click();
-  assert.equal(await pageA.getByLabel("Asset", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "Home");
+  assert.equal(await pageA.getByLabel("Asset", { exact: true }).isHidden(), true);
   await pageA.getByLabel("What was done").fill("Filter change");
   await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "HVAC" });
   await pageA.getByLabel("Cost").fill("25");
@@ -377,7 +397,7 @@ try {
   await assertNav(phone);
   await assertHeadingClear(phone, "pixel after sign-in");
   await phone.getByRole("link", { name: "House", exact: true }).click();
-  await phone.getByTestId("house-name").getByText("Home").waitFor({ timeout: 15000 });
+  await phone.getByRole("link", { name: "Edit home" }).waitFor({ timeout: 15000 });
   await phone.getByText("Filter change").first().waitFor({ timeout: 15000 });
   await phone.getByText("Gutter cleaning").first().waitFor();
   await phone.getByTestId("house-month-total").getByText("$25.00").waitFor();
