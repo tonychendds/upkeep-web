@@ -296,6 +296,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
     function showError(message) {
       error.hidden = !message;
       error.textContent = message || "";
+      // The message sits at the top of a long form; bring it into view after tapping Save.
+      if (message) error.scrollIntoView({ block: "nearest" });
     }
 
     function selectedType() {
@@ -665,6 +667,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       if (problem) {
         error.hidden = false;
         error.textContent = problem;
+        error.scrollIntoView({ block: "nearest" });
         return;
       }
       saveRecord(state, record);
@@ -744,6 +747,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       if (problem) {
         error.hidden = false;
         error.textContent = problem;
+        error.scrollIntoView({ block: "nearest" });
         return;
       }
       saveRecord(state, record);
