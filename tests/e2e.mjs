@@ -36,6 +36,37 @@ try {
 
   const pointerEvents = await pageA.evaluate(() => getComputedStyle(document.querySelector("nav a svg")).pointerEvents);
   assert.equal(pointerEvents, "none");
+  const icon = await pageA.evaluate(async () => {
+    const img = document.querySelector(".brand img");
+    await img.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let light = 0;
+    let minx = canvas.width;
+    let maxx = 0;
+    let miny = canvas.height;
+    let maxy = 0;
+    for (let y = 0; y < canvas.height; y += 1) {
+      for (let x = 0; x < canvas.width; x += 1) {
+        const index = (y * canvas.width + x) * 4;
+        if (data[index] > 220 && data[index + 1] > 220 && data[index + 2] > 220) {
+          light += 1;
+          minx = Math.min(minx, x);
+          maxx = Math.max(maxx, x);
+          miny = Math.min(miny, y);
+          maxy = Math.max(maxy, y);
+        }
+      }
+    }
+    return { w: canvas.width, h: canvas.height, light, bw: maxx - minx, bh: maxy - miny };
+  });
+  assert.equal(icon.w, 192);
+  assert.equal(icon.h, 192);
+  assert.ok(icon.bw > 80 && icon.bh > 80 && icon.light > 4000, `logo is not a solid icon ${JSON.stringify(icon)}`);
 
   await pageA.getByRole("link", { name: "More" }).click();
   await pageA.getByRole("link", { name: "Account and sync" }).click();
@@ -48,9 +79,15 @@ try {
   assert.match(await pageA.getByTestId("account-result").innerText(), /cannot be reset/i);
   assert.doesNotMatch(await pageA.getByTestId("account-result").innerText(), /Account created/);
   await pageA.getByRole("checkbox", { name: /I understand/i }).check();
+  await pageA.evaluate(() => {
+    const main = document.querySelector("#main");
+    main.scrollTop = main.scrollHeight;
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  });
   await pageA.getByRole("button", { name: "Create account" }).click();
   await pageA.getByText(/Account created/i).waitFor({ timeout: 20000 });
   await pageA.getByTestId("sync-banner").getByText(/Last synced/i).waitFor({ timeout: 20000 });
+  await assertHeadingClear(pageA, "iphone after create");
   await pageA.screenshot({ path: path.join(shots, "iphone_account_created.png") });
   const signedInIcon = await pageA.evaluate(() => getComputedStyle(document.querySelector("#sync-banner svg")).pointerEvents);
   assert.equal(signedInIcon, "none");
@@ -79,7 +116,15 @@ try {
   assert.equal(await pageA.getByLabel("VIN").inputValue(), vin);
   await pageA.getByRole("link", { name: "Jobs" }).click();
   await pageA.getByRole("link", { name: "Log a job" }).click();
+  assert.equal(await pageA.getByLabel("Category", { exact: true }).inputValue(), "");
+  assert.equal(await pageA.getByLabel("Category", { exact: true }).evaluate((el) => el.selectedOptions[0].textContent), "Choose…");
   await pageA.getByLabel("What was done").fill("Oil change");
+  await pageA.getByRole("button", { name: "Save job" }).click();
+  await pageA.getByText("Choose a category.").waitFor();
+  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "2019 Lexus RX · 8ABC123" });
+  await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Oil change" });
+  await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "Home" });
+  assert.equal(await pageA.getByLabel("Category", { exact: true }).inputValue(), "");
   await pageA.getByLabel("Asset", { exact: true }).selectOption({ label: "2019 Lexus RX · 8ABC123" });
   await pageA.getByLabel("Category", { exact: true }).selectOption({ label: "Oil change" });
   await pageA.getByLabel("Where").fill("Dealer");
@@ -179,14 +224,53 @@ try {
   await pad.getByRole("link", { name: "Account and sync" }).click();
   await pad.getByLabel("Email or username").fill(login);
   await pad.getByLabel("Password", { exact: true }).fill(password);
+  await pad.evaluate(() => {
+    const main = document.querySelector("#main");
+    main.scrollTop = main.scrollHeight;
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  });
   await pad.getByRole("button", { name: "Sign in" }).click();
+  await pad.getByText(/Signed in as/i).first().waitFor({ timeout: 20000 });
+  await assertHeadingClear(pad, "ipad after sign-in");
+  await pad.screenshot({ path: path.join(shots, "after_account_ipad.png") });
   await pad.getByRole("link", { name: "Summary" }).click();
   await pad.getByText("Gutter cleaning").waitFor({ timeout: 15000 }).catch(() => {});
   await pad.getByRole("link", { name: "Jobs" }).click();
   await pad.getByText("Gutter cleaning").first().waitFor({ timeout: 15000 });
+  await assertHeadingClear(pad, "ipad jobs");
+  for (const name of ["Summary", "Upcoming", "More"]) {
+    await pad.getByRole("link", { name }).click();
+    await assertHeadingClear(pad, `ipad ${name}`);
+  }
   const ipadOverflow = await pad.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(ipadOverflow <= 1, `iPad overflow ${ipadOverflow}`);
   await ipad.close();
+
+  const landscape = await browser.newContext({
+    ...devices["iPad Mini"],
+    viewport: { width: 1024, height: 768 },
+    screen: { width: 1024, height: 768 },
+  });
+  const wide = await landscape.newPage();
+  await wide.goto(server.pageUrl);
+  await wide.getByRole("link", { name: "More" }).click();
+  await wide.getByRole("link", { name: "Account and sync" }).click();
+  await wide.getByLabel("Email or username").fill(login);
+  await wide.getByLabel("Password", { exact: true }).fill(password);
+  await wide.evaluate(() => {
+    const main = document.querySelector("#main");
+    main.scrollTop = main.scrollHeight;
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  });
+  await wide.getByRole("button", { name: "Sign in" }).click();
+  await wide.getByText(/Signed in as/i).first().waitFor({ timeout: 20000 });
+  await assertHeadingClear(wide, "ipad landscape after sign-in");
+  await wide.screenshot({ path: path.join(shots, "after_account_ipad_landscape.png") });
+  for (const name of ["Summary", "Upcoming", "Jobs"]) {
+    await wide.getByRole("link", { name }).click();
+    await assertHeadingClear(wide, `ipad landscape ${name}`);
+  }
+  await landscape.close();
   console.log("e2e ok");
 } catch (error) {
   failures.push(error);
@@ -201,6 +285,24 @@ try {
 } finally {
   await browser.close();
   await server.stop();
+}
+
+async function assertHeadingClear(page, label) {
+  const metrics = await page.evaluate(() => {
+    const banner = document.querySelector("#sync-banner").getBoundingClientRect();
+    const heading = document.querySelector("#main h1").getBoundingClientRect();
+    const main = document.querySelector("#main");
+    return {
+      gap: heading.top - banner.bottom,
+      scrollY: window.scrollY,
+      mainScroll: main.scrollTop,
+      windowOverflow: document.documentElement.scrollHeight - window.innerHeight,
+    };
+  });
+  assert.ok(metrics.gap >= -1, `${label} heading under banner ${JSON.stringify(metrics)}`);
+  assert.ok(Math.abs(metrics.scrollY) <= 1, `${label} window scrolled ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.mainScroll <= 1, `${label} content scrolled ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.windowOverflow <= 1, `${label} window can scroll ${JSON.stringify(metrics)}`);
 }
 
 async function saveAndSync(page, buttonName) {

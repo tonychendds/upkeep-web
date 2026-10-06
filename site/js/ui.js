@@ -93,6 +93,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
     );
   }
 
+  let shownKey = "";
+
   function renderMain() {
     const route = parseRoute(location.hash);
     main.dataset.screen = route.name;
@@ -108,9 +110,17 @@ export function mountApp(root, { state, sync, syncUrl }) {
       account: () => renderAccount(),
       more: () => renderMore(),
     }[route.name];
+    const key = [route.name, route.id || "", route.markDone ? "1" : "", accountMode, state.flash?.text || ""].join("\0");
+    const resetScroll = key !== shownKey;
+    shownKey = key;
     main.replaceChildren(view ? view() : renderSummary());
-    // preventScroll: focusing <main> otherwise scrolls the page heading under the sticky header on phones.
+    if (resetScroll) {
+      main.scrollTop = 0;
+      window.scrollTo(0, 0);
+    }
+    // preventScroll: focusing <main> otherwise scrolls the heading under the header.
     main.focus?.({ preventScroll: true });
+    if (resetScroll) main.scrollTop = 0;
   }
 
   function renderData() {
@@ -300,11 +310,15 @@ export function mountApp(root, { state, sync, syncUrl }) {
 
     function fillCategories(preferred) {
       const options = categoriesFor(state.records, selectedType());
+      const placeholder = new Option("Choose…", "");
+      placeholder.disabled = true;
       categorySelect.replaceChildren(
+        placeholder,
         ...options.map((category) => new Option(category.name, category.id)),
         new Option("Add a category…", "__new"),
       );
-      categorySelect.value = options.some((category) => category.id === preferred) ? preferred : options[0]?.id || "__new";
+      const keep = preferred && options.some((category) => category.id === preferred) ? preferred : "";
+      categorySelect.value = keep;
       newCategoryWrap.hidden = categorySelect.value !== "__new";
     }
 
@@ -429,6 +443,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       const assetId = assetSelect.value;
       const assetType = selectedType();
       let categoryId = categorySelect.value;
+      if (!categoryId) return showError("Choose a category.");
       if (categoryId === "__new") {
         const name = newCategory.value.trim();
         if (!name) return showError("Name the new category.");
