@@ -21,6 +21,9 @@ export function loadState() {
       const session = JSON.parse(rawSession);
       if (session && typeof session.token === "string" && session.token && typeof session.email === "string") {
         state.session = { token: session.token, email: session.email };
+        if (typeof session.recoveryEmail === "string" || session.recoveryEmail === null) {
+          state.session.recoveryEmail = session.recoveryEmail;
+        }
       }
     }
   } catch {

@@ -89,13 +89,13 @@ export function createSync(state, syncUrl, hooks) {
   return { schedule, syncNow };
 }
 
-export async function registerAccount(syncUrl, email, password) {
+export async function registerAccount(syncUrl, email, password, recoveryEmail) {
   let response;
   try {
     response = await fetch(`${syncUrl}/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, recoveryEmail: recoveryEmail ?? "" }),
     });
   } catch {
     return { ok: false, error: "Could not reach the sync server. The account was not created." };
@@ -125,10 +125,91 @@ async function readAuthResult(response, successStatus, fallback) {
     body = null;
   }
   if (response.status === successStatus && body && typeof body.token === "string" && body.token && typeof body.email === "string") {
-    return { ok: true, token: body.token, email: body.email };
+    const recoveryEmail = typeof body.recoveryEmail === "string" && body.recoveryEmail ? body.recoveryEmail : null;
+    return { ok: true, token: body.token, email: body.email, recoveryEmail };
   }
   const reason = body?.error || `${fallback} (server status ${response.status}).`;
   return { ok: false, error: reason };
+}
+
+export async function requestPasswordReset(syncUrl, email) {
+  let response;
+  try {
+    response = await fetch(`${syncUrl}/auth/reset-request`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    return { ok: false, error: "Could not reach the sync server. The reset link was not sent." };
+  }
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  if (response.ok && body?.ok === true) return { ok: true };
+  return { ok: false, error: body?.error || "The reset link was not sent." };
+}
+
+export async function confirmPasswordReset(syncUrl, token, password) {
+  let response;
+  try {
+    response = await fetch(`${syncUrl}/auth/reset-confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, password }),
+    });
+  } catch {
+    return { ok: false, error: "Could not reach the sync server. The password was not changed." };
+  }
+  return readAuthResult(response, 200, "The password was not changed.");
+}
+
+export async function updateRecoveryEmail(syncUrl, token, password, recoveryEmail) {
+  let response;
+  try {
+    response = await fetch(`${syncUrl}/auth/recovery-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ password, recoveryEmail }),
+    });
+  } catch {
+    return { ok: false, error: "Could not reach the sync server. The recovery email was not changed." };
+  }
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  if (response.ok && body?.ok === true && typeof body.recoveryEmail === "string") {
+    return { ok: true, recoveryEmail: body.recoveryEmail };
+  }
+  return { ok: false, error: body?.error || "The recovery email was not changed." };
+}
+
+export async function fetchAccount(syncUrl, token) {
+  let response;
+  try {
+    response = await fetch(`${syncUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    return { ok: false, error: "Could not reach the sync server." };
+  }
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  if (response.ok && body && typeof body.email === "string") {
+    const recoveryEmail = typeof body.recoveryEmail === "string" && body.recoveryEmail ? body.recoveryEmail : null;
+    return { ok: true, email: body.email, recoveryEmail };
+  }
+  return { ok: false, error: body?.error || "Could not load the account.", status: response.status };
 }
 
 export async function logoutAccount(syncUrl, token) {

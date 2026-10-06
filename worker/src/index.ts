@@ -5,6 +5,8 @@ const MAX_RECORDS = 2000;
 
 interface Env {
   DB: D1Database;
+  RESET_RELAY_URL?: string;
+  RESET_RELAY_SECRET?: string;
 }
 
 interface D1Statement {
@@ -23,6 +25,7 @@ interface UserRow {
   email: string;
   password_hash: string;
   password_salt: string;
+  recovery_email: string | null;
 }
 
 interface RecordRow {
@@ -43,6 +46,12 @@ interface SyncRecord {
   payload: Record<string, unknown> | null;
 }
 
+const RESET_MESSAGE = "If that account has a recovery email, a reset link is on its way.";
+const RESET_LINK_PREFIX = "https://tonychendds.github.io/upkeep-web/#reset=";
+const RESET_WINDOW_MS = 60 * 60 * 1000;
+const DEFAULT_RESET_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_RESET_LIMIT = 3;
+
 const worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get("Origin");
@@ -56,6 +65,10 @@ const worker = {
       if (request.method === "POST" && url.pathname === "/auth/register") return cors(request, await register(request, env));
       if (request.method === "POST" && url.pathname === "/auth/login") return cors(request, await login(request, env));
       if (request.method === "POST" && url.pathname === "/auth/logout") return cors(request, await logout(request, env));
+      if (request.method === "GET" && url.pathname === "/auth/me") return cors(request, await accountInfo(request, env));
+      if (request.method === "POST" && url.pathname === "/auth/recovery-email") return cors(request, await updateRecoveryEmail(request, env));
+      if (request.method === "POST" && url.pathname === "/auth/reset-request") return cors(request, await resetRequest(request, env));
+      if (request.method === "POST" && url.pathname === "/auth/reset-confirm") return cors(request, await resetConfirm(request, env));
       if (request.method === "GET" && url.pathname === "/sync") return cors(request, await pull(request, env));
       if (request.method === "POST" && url.pathname === "/sync") return cors(request, await push(request, env));
       return cors(request, json({ error: "Not found." }, 404));
@@ -103,26 +116,235 @@ async function register(request: Request, env: Env): Promise<Response> {
   if (!credentials.ok) return json({ error: credentials.error }, 400);
   const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(credentials.login).first<{ id: string }>();
   if (existing) return json({ error: "An account with that email or username already exists." }, 409);
+  const recovery = normalizeRecovery(credentials.recoveryEmail, credentials.recoveryProvided, credentials.login);
+  if (!recovery.ok) return json({ error: recovery.error }, 400);
   const { hash, salt } = await hashPassword(credentials.password);
   const id = crypto.randomUUID();
-  await env.DB.prepare("INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)")
-    .bind(id, credentials.login, hash, salt, Date.now())
+  await env.DB.prepare(
+    "INSERT INTO users (id, email, password_hash, password_salt, created_at, recovery_email) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(id, credentials.login, hash, salt, Date.now(), recovery.email)
     .run();
   const token = await createSession(env, id);
-  return json({ token, email: credentials.login }, 201);
+  return json({ token, email: credentials.login, recoveryEmail: recovery.email }, 201);
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
   const credentials = await readCredentials(request);
   if (!credentials.ok) return json({ error: credentials.error }, 400);
-  const user = await env.DB.prepare("SELECT id, email, password_hash, password_salt FROM users WHERE email = ?")
+  const user = await env.DB.prepare(
+    "SELECT id, email, password_hash, password_salt, recovery_email FROM users WHERE email = ?",
+  )
     .bind(credentials.login)
     .first<UserRow>();
   if (!user || !(await verifyPassword(credentials.password, user.password_salt, user.password_hash))) {
     return json({ error: "Email or password does not match." }, 401);
   }
   const token = await createSession(env, user.id);
-  return json({ token, email: user.email });
+  return json({ token, email: user.email, recoveryEmail: user.recovery_email });
+}
+
+async function accountInfo(request: Request, env: Env): Promise<Response> {
+  const user = await userFromRequest(request, env);
+  if (!user) return json({ error: "Sign in again." }, 401);
+  return json({ email: user.email, recoveryEmail: user.recovery_email });
+}
+
+async function updateRecoveryEmail(request: Request, env: Env): Promise<Response> {
+  const user = await userFromRequest(request, env);
+  if (!user) return json({ error: "Sign in again." }, 401);
+  const body = await readObject(request);
+  if (!body.ok) return json({ error: body.error }, 400);
+  const password = typeof body.value.password === "string" ? body.value.password : "";
+  if (!(await verifyPassword(password, user.password_salt, user.password_hash))) {
+    return json({ error: "Current password does not match." }, 401);
+  }
+  const recovery = normalizeRecovery(body.value.recoveryEmail, true, user.email);
+  if (!recovery.ok) return json({ error: recovery.error }, 400);
+  if (!recovery.email) return json({ error: "Enter a recovery email." }, 400);
+  await env.DB.prepare("UPDATE users SET recovery_email = ? WHERE id = ?").bind(recovery.email, user.id).run();
+  return json({ ok: true, recoveryEmail: recovery.email });
+}
+
+async function resetRequest(request: Request, env: Env): Promise<Response> {
+  const body = await readObject(request);
+  if (!body.ok) return json({ error: body.error }, 400);
+  const login = normalizeLogin(body.value.email);
+  if (!login) return json({ error: "Enter a valid email address or username." }, 400);
+  const now = Date.now();
+  const ipBucket = `ip:${clientIp(request)}`;
+  if (!(await consumeResetLimit(env, ipBucket, now))) {
+    console.error(`upkeep reset: rate limit ip bucket=${ipBucket}`);
+    return json({ ok: true, message: RESET_MESSAGE });
+  }
+  const user = await env.DB.prepare("SELECT id, email, recovery_email FROM users WHERE email = ?")
+    .bind(login)
+    .first<{ id: string; email: string; recovery_email: string | null }>();
+  if (!user) {
+    console.error("upkeep reset: no account for that username");
+    return json({ ok: true, message: RESET_MESSAGE });
+  }
+  const accountBucket = `acct:${user.id}`;
+  if (!(await consumeResetLimit(env, accountBucket, now))) {
+    console.error(`upkeep reset: rate limit account=${user.id}`);
+    return json({ ok: true, message: RESET_MESSAGE });
+  }
+  if (!user.recovery_email) {
+    console.error(`upkeep reset: account ${user.id} has no recovery email`);
+    return json({ ok: true, message: RESET_MESSAGE });
+  }
+  const token = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+  const expiresAt = now + DEFAULT_RESET_TTL_MS;
+  await env.DB.prepare("UPDATE password_resets SET used_at = ? WHERE user_id = ? AND used_at IS NULL")
+    .bind(now, user.id)
+    .run();
+  await env.DB.prepare(
+    "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)",
+  )
+    .bind(await sha256Hex(token), user.id, now, expiresAt)
+    .run();
+  await sendResetLink(env, user.recovery_email, token);
+  return json({ ok: true, message: RESET_MESSAGE });
+}
+
+async function resetConfirm(request: Request, env: Env): Promise<Response> {
+  const body = await readObject(request);
+  if (!body.ok) return json({ error: body.error }, 400);
+  const token = typeof body.value.token === "string" ? body.value.token.trim() : "";
+  const password = typeof body.value.password === "string" ? body.value.password : "";
+  if (!/^[A-Fa-f0-9]{64}$/.test(token)) return json({ error: "This reset link has expired or was already used." }, 400);
+  if (password.length < 8 || password.length > 200) return json({ error: "Password must be 8 to 200 characters." }, 400);
+  const now = Date.now();
+  const jitter = crypto.getRandomValues(new Uint8Array(2));
+  const marker = now * 1000 + (((jitter[0] << 8) | jitter[1]) % 1000);
+  const tokenHash = await sha256Hex(token);
+  const marked = await env.DB.prepare(
+    "UPDATE password_resets SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+  )
+    .bind(marker, tokenHash, now)
+    .run();
+  const won = changesOf(marked) === 1 || await resetMarkerStuck(env, tokenHash, marker, now);
+  if (!won) {
+    console.error("upkeep reset: confirm rejected for expired or used token");
+    return json({ error: "This reset link has expired or was already used." }, 400);
+  }
+  const row = await env.DB.prepare("SELECT user_id FROM password_resets WHERE token_hash = ?")
+    .bind(tokenHash)
+    .first<{ user_id: string }>();
+  if (!row) return json({ error: "This reset link has expired or was already used." }, 400);
+  const { hash, salt } = await hashPassword(password);
+  await env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
+    .bind(hash, salt, row.user_id)
+    .run();
+  await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(row.user_id).run();
+  const session = await createSession(env, row.user_id);
+  const user = await env.DB.prepare("SELECT email, recovery_email FROM users WHERE id = ?")
+    .bind(row.user_id)
+    .first<{ email: string; recovery_email: string | null }>();
+  console.error(`upkeep reset: password updated account=${row.user_id} sessions cleared`);
+  return json({ token: session, email: user?.email ?? "", recoveryEmail: user?.recovery_email ?? null });
+}
+
+async function sendResetLink(env: Env, to: string, token: string): Promise<void> {
+  const url = env.RESET_RELAY_URL;
+  const secret = env.RESET_RELAY_SECRET;
+  const link = `${RESET_LINK_PREFIX}${token}`;
+  if (!url || !secret) {
+    console.error("upkeep reset: relay skipped because RESET_RELAY_URL or RESET_RELAY_SECRET is not set");
+    return;
+  }
+  if (!link.startsWith("https://tonychendds.github.io/upkeep-web/")) {
+    console.error("upkeep reset: refused to send a link outside the site");
+    return;
+  }
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret, to, link }),
+    });
+    const text = await response.text();
+    let parsed: { ok?: boolean; error?: string } | null = null;
+    try {
+      const value = JSON.parse(text) as unknown;
+      if (value && typeof value === "object" && !Array.isArray(value)) parsed = value as { ok?: boolean; error?: string };
+    } catch {
+      parsed = null;
+    }
+    if (!response.ok || !parsed || parsed.ok !== true) {
+      console.error(`upkeep reset: relay failed status=${response.status} to=${to} error=${parsed?.error || text.slice(0, 180)}`);
+      return;
+    }
+    console.error(`upkeep reset: relay accepted to=${to}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    console.error(`upkeep reset: relay unreachable to=${to} error=${message}`);
+  }
+}
+
+async function consumeResetLimit(env: Env, bucket: string, now: number): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT window_start, hits FROM reset_rate_limits WHERE bucket = ?")
+    .bind(bucket)
+    .first<{ window_start: number; hits: number }>();
+  if (!row || now - row.window_start >= RESET_WINDOW_MS) {
+    await env.DB.prepare(
+      "INSERT INTO reset_rate_limits (bucket, window_start, hits) VALUES (?, ?, 1) ON CONFLICT(bucket) DO UPDATE SET window_start = ?, hits = 1",
+    )
+      .bind(bucket, now, now)
+      .run();
+    return true;
+  }
+  if (row.hits >= DEFAULT_RESET_LIMIT) return false;
+  await env.DB.prepare("UPDATE reset_rate_limits SET hits = hits + 1 WHERE bucket = ?").bind(bucket).run();
+  return true;
+}
+
+function clientIp(request: Request): string {
+  const cf = request.headers.get("CF-Connecting-IP")?.trim();
+  if (cf) return cf.slice(0, 80);
+  const forwarded = request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim();
+  if (forwarded) return forwarded.slice(0, 80);
+  return "unknown";
+}
+
+function changesOf(result: unknown): number {
+  if (!result || typeof result !== "object") return 0;
+  const meta = (result as { meta?: { changes?: number } }).meta;
+  return typeof meta?.changes === "number" ? meta.changes : 0;
+}
+
+async function resetMarkerStuck(env: Env, tokenHash: string, marker: number, now: number): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT used_at, expires_at FROM password_resets WHERE token_hash = ?")
+    .bind(tokenHash)
+    .first<{ used_at: number | null; expires_at: number }>();
+  return Boolean(row && row.used_at === marker && row.expires_at > now);
+}
+
+function normalizeRecovery(
+  value: unknown,
+  provided: boolean,
+  login: string,
+): { ok: true; email: string | null } | { ok: false; error: string } {
+  if (!provided) {
+    return { ok: true, email: login.includes("@") ? login : null };
+  }
+  if (value == null || value === "") return { ok: true, email: null };
+  if (typeof value !== "string") return { ok: false, error: "Enter a valid recovery email." };
+  const email = value.trim().toLowerCase();
+  if (!email) return { ok: true, email: null };
+  if (email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, error: "Enter a valid recovery email." };
+  }
+  return { ok: true, email };
+}
+
+async function userFromRequest(request: Request, env: Env): Promise<UserRow | null> {
+  const userId = await userIdFromRequest(request, env);
+  if (!userId) return null;
+  return env.DB.prepare("SELECT id, email, password_hash, password_salt, recovery_email FROM users WHERE id = ?")
+    .bind(userId)
+    .first<UserRow>();
 }
 
 async function logout(request: Request, env: Env): Promise<Response> {
@@ -415,14 +637,22 @@ function bearer(request: Request): string | null {
   return match ? match[1] : null;
 }
 
-async function readCredentials(request: Request): Promise<{ ok: true; login: string; password: string } | { ok: false; error: string }> {
+async function readCredentials(request: Request): Promise<
+  { ok: true; login: string; password: string; recoveryEmail: unknown; recoveryProvided: boolean } | { ok: false; error: string }
+> {
   const body = await readObject(request);
   if (!body.ok) return body;
   const login = normalizeLogin(body.value.email);
   const password = typeof body.value.password === "string" ? body.value.password : "";
   if (!login) return { ok: false, error: "Enter a valid email address or username." };
   if (password.length < 8 || password.length > 200) return { ok: false, error: "Password must be 8 to 200 characters." };
-  return { ok: true, login, password };
+  return {
+    ok: true,
+    login,
+    password,
+    recoveryEmail: body.value.recoveryEmail,
+    recoveryProvided: Object.prototype.hasOwnProperty.call(body.value, "recoveryEmail"),
+  };
 }
 
 function normalizeLogin(value: unknown): string | null {

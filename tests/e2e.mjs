@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { chromium, devices } from "playwright";
 import { addMonths } from "../site/js/model.js";
+import { startRelay } from "../worker/test/relay.mjs";
 
 const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -71,12 +72,15 @@ try {
   await pageA.getByRole("link", { name: "More" }).click();
   await pageA.getByRole("link", { name: "Account and sync" }).click();
   await pageA.getByRole("button", { name: "New account" }).click();
+  await pageA.getByLabel("Email or username").fill("ada@example.com");
+  assert.equal(await pageA.getByLabel("Recovery email", { exact: true }).inputValue(), "ada@example.com");
   await pageA.getByLabel("Email or username").fill(login);
+  assert.equal(await pageA.getByLabel("Recovery email", { exact: true }).inputValue(), "");
   await pageA.getByLabel("Password", { exact: true }).fill(password);
   await pageA.getByLabel("Confirm password").fill(password);
   await pageA.getByRole("button", { name: "Create account" }).click();
   await pageA.getByTestId("account-result").waitFor();
-  assert.match(await pageA.getByTestId("account-result").innerText(), /cannot be reset/i);
+  assert.match(await pageA.getByTestId("account-result").innerText(), /Check the box/i);
   assert.doesNotMatch(await pageA.getByTestId("account-result").innerText(), /Account created/);
   await pageA.getByRole("checkbox", { name: /I understand/i }).check();
   await pageA.evaluate(() => {
@@ -271,6 +275,77 @@ try {
     await assertHeadingClear(wide, `ipad landscape ${name}`);
   }
   await landscape.close();
+
+  await pageA.getByRole("link", { name: "More" }).click();
+  await pageA.getByRole("link", { name: "Account and sync" }).click();
+  await pageA.getByText(/No recovery email is set/i).waitFor();
+  const recovery = `reset-${login}@example.com`;
+  await pageA.getByLabel("Recovery email", { exact: true }).fill(recovery);
+  await pageA.getByLabel("Current password").fill(password);
+  await pageA.getByRole("button", { name: "Save recovery email" }).click();
+  await pageA.getByText(`Recovery email saved. A reset link can be emailed to ${recovery}.`).waitFor({ timeout: 20000 });
+
+  await pageB.getByRole("link", { name: "More" }).click();
+  await pageB.getByRole("link", { name: "Account and sync" }).click();
+  await pageB.getByRole("button", { name: "Sign out" }).click();
+  await pageB.getByRole("dialog").getByRole("button", { name: "Sign out" }).click();
+  await pageB.getByRole("button", { name: "Forgot password?" }).click();
+  await pageB.getByLabel("Email or username").fill(login);
+  const sentBefore = server.relay.requests.length;
+  await pageB.getByRole("button", { name: "Send reset link" }).click();
+  await pageB.getByText("If that account has a recovery email, a reset link is on its way.").waitFor({ timeout: 20000 });
+  const deadline = Date.now() + 10000;
+  while (server.relay.requests.length < sentBefore + 1 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const sent = server.relay.requests.at(-1);
+  assert.equal(sent.to, recovery);
+  assert.match(sent.link, /^https:\/\/tonychendds\.github\.io\/upkeep-web\/#reset=[a-f0-9]{64}$/);
+  const resetToken = sent.link.split("#reset=")[1];
+  await pageB.goto(`${server.pageUrl}#reset=${resetToken}`);
+  await pageB.getByRole("heading", { name: "Choose a new password" }).waitFor();
+  await pageB.getByLabel("New password").fill("fresh-password");
+  await pageB.getByLabel("Confirm password").fill("fresh-password");
+  await pageB.getByRole("button", { name: "Update password" }).click();
+  await pageB.getByText(/Password updated/i).waitFor({ timeout: 20000 });
+  await assertHeadingClear(pageB, "iphone after password reset");
+  assert.equal(new URL(pageB.url()).hash, "#/account");
+  const signedInIconAfterReset = await pageB.evaluate(() => getComputedStyle(document.querySelector("#sync-banner svg")).pointerEvents);
+  assert.equal(signedInIconAfterReset, "none");
+  await pageB.getByRole("link", { name: "Jobs" }).click();
+  await pageB.getByText("Gutter cleaning").first().waitFor({ timeout: 15000 });
+
+  await pageA.getByRole("link", { name: "Jobs" }).click();
+  await pageA.getByText("Gutter cleaning").first().waitFor();
+  const oldSession = await pageA.evaluate(async () => {
+    const session = JSON.parse(localStorage.getItem("upkeep.session.v1") || "null");
+    const sync = new URL(location.href).searchParams.get("sync");
+    const response = await fetch(`${sync}/sync`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session?.token || ""}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ records: [] }),
+    });
+    return { status: response.status, hasToken: Boolean(session?.token) };
+  });
+  assert.equal(oldSession.status, 401, `old session still accepted (${oldSession.status})`);
+  const expired = pageA.waitForResponse((response) => response.url().endsWith("/sync") && response.status() === 401);
+  await pageA.getByTestId("sync-banner").getByRole("button", { name: "Sync now" }).click();
+  await expired;
+  await pageA.getByTestId("sync-banner").getByText(/session expired/i).waitFor({ timeout: 15000 });
+  await pageA.getByText("Gutter cleaning").first().waitFor();
+
+  await pageB.goto(`${server.pageUrl}#reset=${resetToken}`);
+  await pageB.getByRole("heading", { name: "Choose a new password" }).waitFor();
+  await pageB.getByLabel("New password").fill("fresh-password");
+  await pageB.getByLabel("Confirm password").fill("fresh-password");
+  await pageB.getByRole("button", { name: "Update password" }).click();
+  await pageB.getByText(/expired or was already used/i).waitFor({ timeout: 20000 });
+  await pageB.getByRole("button", { name: "Send a new link" }).click();
+  await pageB.getByRole("heading", { name: "Forgot password" }).waitFor();
+  assert.equal(new URL(pageB.url()).hash, "#/account");
   console.log("e2e ok");
 } catch (error) {
   failures.push(error);
@@ -320,6 +395,7 @@ function shiftDays(days) {
 }
 
 async function boot() {
+  const relay = await startRelay();
   const dir = await mkdtemp(path.join(tmpdir(), "upkeep-e2e-"));
   const workerPort = await freePort();
   const inspector = await freePort();
@@ -332,7 +408,7 @@ async function boot() {
   );
   const child = spawn(
     "npx",
-    ["wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(workerPort), "--inspector-port", String(inspector), "--persist-to", dir, "--show-interactive-dev-session=false", "--log-level", "warn"],
+    ["wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(workerPort), "--inspector-port", String(inspector), "--persist-to", dir, "--show-interactive-dev-session=false", "--log-level", "warn", "--var", `RESET_RELAY_URL:${relay.url}`, "--var", `RESET_RELAY_SECRET:${relay.secret}`],
     { cwd: path.join(root, "worker"), env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
   let logs = "";
@@ -372,9 +448,11 @@ async function boot() {
   await new Promise((resolve) => site.listen(sitePort, "127.0.0.1", resolve));
   return {
     pageUrl: `http://127.0.0.1:${sitePort}/?sync=${encodeURIComponent(workerUrl)}`,
+    relay,
     stop: async () => {
       site.close();
       try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+      await relay.stop();
       await rm(dir, { recursive: true, force: true });
     },
   };

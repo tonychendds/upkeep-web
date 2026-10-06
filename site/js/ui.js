@@ -29,7 +29,7 @@ import {
   upcomingItems,
 } from "./model.js";
 import { clearSession, deleteRecord, importRecords, saveRecord, setSession } from "./store.js";
-import { loginAccount, logoutAccount, registerAccount } from "./sync.js";
+import { confirmPasswordReset, fetchAccount, loginAccount, logoutAccount, registerAccount, requestPasswordReset, updateRecoveryEmail } from "./sync.js";
 
 const FORM_ROUTES = new Set(["job", "asset", "contractor"]);
 const jobsFilter = { query: "", assetId: "", status: "", categoryId: "" };
@@ -46,6 +46,8 @@ export function mountApp(root, { state, sync, syncUrl }) {
     renderNav();
     renderMain();
     window.addEventListener("hashchange", () => {
+      const route = parseRoute(location.hash);
+      if (route.name !== "account" && route.name !== "reset") accountMode = "signin";
       state.flash = null;
       renderBanner();
       renderNav();
@@ -59,9 +61,10 @@ export function mountApp(root, { state, sync, syncUrl }) {
     banner.replaceChildren();
     if (state.loadWarning) banner.append(el("p", {}, [state.loadWarning]));
     if (!state.session) {
-      banner.className = "banner warn";
+      const expired = typeof state.flash?.text === "string" && /session expired/i.test(state.flash.text);
+      banner.className = expired ? "banner error" : "banner warn";
       banner.append(
-        el("p", {}, ["Not signed in. This log stays on this device only."]),
+        el("p", {}, [expired ? state.flash.text : "Not signed in. This log stays on this device only."]),
         el("a", { class: "banner-link", href: "#/account" }, ["Sign in"]),
       );
       return;
@@ -108,9 +111,10 @@ export function mountApp(root, { state, sync, syncUrl }) {
       contractors: () => renderContractors(),
       contractor: () => renderContractor(route),
       account: () => renderAccount(),
+      reset: () => renderReset(route),
       more: () => renderMore(),
     }[route.name];
-    const key = [route.name, route.id || "", route.markDone ? "1" : "", accountMode, state.flash?.text || ""].join("\0");
+    const key = [route.name, route.id || "", route.token || "", route.markDone ? "1" : "", accountMode, state.flash?.text || ""].join("\0");
     const resetScroll = key !== shownKey;
     shownKey = key;
     main.replaceChildren(view ? view() : renderSummary());
@@ -777,14 +781,52 @@ export function mountApp(root, { state, sync, syncUrl }) {
 
   function renderAccount() {
     const blocks = [el("h1", {}, ["Account"]), flashNode()];
+    if (accountMode === "forgot") return wrap([...blocks, renderForgot()]);
     if (state.session) {
+      if (!("recoveryEmail" in state.session)) ensureRecoveryEmail();
+      const recovery = state.session.recoveryEmail;
+      const recoveryNote = !("recoveryEmail" in state.session)
+        ? "Loading recovery email…"
+        : recovery
+          ? `A reset link can be emailed to ${recovery}.`
+          : "No recovery email is set. Add one so a forgotten password can be reset by email.";
+      const recoveryInput = input("email", recovery || "", { autocomplete: "email", maxlength: "200", placeholder: "name@example.com" });
+      const currentPassword = input("password", "", { autocomplete: "current-password", maxlength: "200" });
+      const recoveryError = el("div", { class: "flash error", hidden: true, role: "alert" });
+      const recoveryForm = el("form", { class: "stack" });
+      recoveryForm.append(
+        recoveryError,
+        labeled("Recovery email", recoveryInput),
+        labeled("Current password", currentPassword),
+        el("button", { type: "submit", class: "button" }, ["Save recovery email"]),
+      );
+      recoveryForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        recoveryError.hidden = true;
+        const next = recoveryInput.value.trim();
+        if (!looksLikeEmail(next)) {
+          recoveryError.hidden = false;
+          recoveryError.textContent = "Enter a valid recovery email.";
+          recoveryError.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        if (currentPassword.value.length < 8) {
+          recoveryError.hidden = false;
+          recoveryError.textContent = "Enter your current password.";
+          recoveryError.scrollIntoView({ block: "nearest" });
+          return;
+        }
+        void saveRecoveryEmail(next, currentPassword.value);
+      });
       blocks.push(
         el("div", { class: "panel stack" }, [
           el("p", { class: "lede" }, [`Signed in as ${state.session.email}.`]),
           el("p", { class: "meta" }, [state.syncError || formatSynced(state.lastSyncedAt)]),
-          el("p", { class: "fine" }, ["There is no password reset. Signing out keeps this log on the device."]),
+          el("p", { class: "fine" }, [recoveryNote]),
+          el("p", { class: "fine" }, ["Signing out keeps this log on the device."]),
         ]),
         el("button", { type: "button", class: "button", onClick: () => void sync.syncNow("manual") }, [icon("sync"), "Sync now"]),
+        recoveryForm,
         el("button", {
           type: "button",
           class: "button secondary",
@@ -803,11 +845,37 @@ export function mountApp(root, { state, sync, syncUrl }) {
     const login = input("text", "", { autocomplete: "username", maxlength: "200" });
     const password = input("password", "", { autocomplete: accountMode === "create" ? "new-password" : "current-password", maxlength: "200" });
     const confirm = input("password", "", { autocomplete: "new-password", maxlength: "200" });
+    const recovery = input("email", "", { autocomplete: "email", maxlength: "200", placeholder: "name@example.com" });
     const ack = el("input", { type: "checkbox", id: "ack" });
+    const ackText = document.createTextNode("");
+    const warningTitle = el("strong", {}, [""]);
+    const warningBody = el("p", { class: "lede" }, [""]);
+    let recoveryTouched = false;
     const signinTab = el("button", { type: "button", "aria-pressed": accountMode === "signin" ? "true" : "false" }, ["I have an account"]);
     const createTab = el("button", { type: "button", "aria-pressed": accountMode === "create" ? "true" : "false" }, ["New account"]);
     signinTab.addEventListener("click", () => { accountMode = "signin"; renderMain(); });
     createTab.addEventListener("click", () => { accountMode = "create"; renderMain(); });
+    function syncRecoveryPrefill() {
+      if (recoveryTouched) return;
+      const typed = login.value.trim();
+      recovery.value = looksLikeEmail(typed) ? typed : "";
+      refreshCreateWarning();
+    }
+    function refreshCreateWarning() {
+      const email = recovery.value.trim();
+      if (looksLikeEmail(email)) {
+        warningTitle.textContent = "A reset link can be emailed to your recovery email.";
+        warningBody.textContent = "There is no separate confirmation email when the account is created. If you forget the password, Forgot password sends the link to that inbox.";
+        ackText.textContent = "I understand a reset link can be emailed only to this recovery email.";
+      } else {
+        warningTitle.textContent = "No recovery email is set.";
+        warningBody.textContent = "A reset link can be emailed only to a recovery email. Without one, a forgotten password cannot be recovered by email.";
+        ackText.textContent = "I understand no recovery email is set, so a forgotten password cannot be recovered by email.";
+      }
+    }
+    login.addEventListener("input", syncRecoveryPrefill);
+    recovery.addEventListener("input", () => { recoveryTouched = true; refreshCreateWarning(); });
+    refreshCreateWarning();
     const form = el("form", { class: "stack" });
     form.append(
       labeled("Email or username", login),
@@ -816,14 +884,19 @@ export function mountApp(root, { state, sync, syncUrl }) {
     if (accountMode === "create") {
       form.append(
         labeled("Confirm password", confirm),
-        el("div", { class: "callout warn" }, [
-          el("strong", {}, ["There is no password reset and no email confirmation."]),
-          el("p", { class: "lede" }, ["If you forget this password, the account cannot be recovered. Store it somewhere safe before you continue."]),
-        ]),
-        el("label", { class: "check" }, [ack, "I understand I must remember this password. It cannot be recovered."]),
+        labeled("Recovery email", recovery),
+        el("div", { class: "callout warn" }, [warningTitle, warningBody]),
+        el("label", { class: "check" }, [ack, ackText]),
       );
     }
     form.append(el("button", { type: "submit", class: "button" }, [accountMode === "create" ? "Create account" : "Sign in"]));
+    if (accountMode === "signin") {
+      form.append(el("button", {
+        type: "button",
+        class: "button secondary",
+        onClick: () => { accountMode = "forgot"; renderMain(); },
+      }, ["Forgot password?"]));
+    }
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       void submitAuth({
@@ -831,11 +904,71 @@ export function mountApp(root, { state, sync, syncUrl }) {
         email: login.value.trim(),
         password: password.value,
         confirm: confirm.value,
+        recoveryEmail: recovery.value.trim(),
         ack: ack.checked,
       });
     });
     blocks.push(el("div", { class: "segment" }, [signinTab, createTab]), form);
     return wrap(blocks);
+  }
+
+  function renderForgot() {
+    const login = input("text", "", { autocomplete: "username", maxlength: "200" });
+    const form = el("form", { class: "stack" });
+    form.append(
+      el("h2", {}, ["Forgot password"]),
+      el("p", { class: "lede" }, ["Enter the username or email on the account. If it has a recovery email, a reset link is sent there."]),
+      labeled("Email or username", login),
+      el("button", { type: "submit", class: "button" }, ["Send reset link"]),
+      el("button", {
+        type: "button",
+        class: "button secondary",
+        onClick: () => { accountMode = "signin"; renderMain(); },
+      }, ["Back to sign in"]),
+    );
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void submitResetRequest(login.value.trim());
+    });
+    return form;
+  }
+
+  function renderReset(route) {
+    const token = String(route.token || "");
+    const usable = /^[A-Fa-f0-9]{64}$/.test(token);
+    const password = input("password", "", { autocomplete: "new-password", maxlength: "200" });
+    const confirm = input("password", "", { autocomplete: "new-password", maxlength: "200" });
+    const form = el("form", { class: "stack" });
+    const blocks = [
+      el("h1", {}, ["Choose a new password"]),
+      flashNode(),
+      el("p", { class: "lede" }, ["This signs you in on this device and signs every other device out. Your maintenance log stays."]),
+    ];
+    if (!usable) {
+      blocks.push(
+        el("div", { class: "flash error", role: "alert" }, ["This reset link has expired or was already used."]),
+        el("button", { type: "button", class: "button secondary", onClick: () => openForgot() }, ["Send a new link"]),
+      );
+      return wrap(blocks);
+    }
+    form.append(
+      labeled("New password", password),
+      labeled("Confirm password", confirm),
+      el("button", { type: "submit", class: "button" }, ["Update password"]),
+    );
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void submitNewPassword(token, password.value, confirm.value);
+    });
+    blocks.push(form);
+    return wrap(blocks);
+  }
+
+  function openForgot() {
+    accountMode = "forgot";
+    state.flash = null;
+    history.replaceState(null, "", `${location.pathname}${location.search}#/account`);
+    renderMain();
   }
 
   function showAccountError(text) {
@@ -850,29 +983,97 @@ export function mountApp(root, { state, sync, syncUrl }) {
     }
     box.className = "flash error";
     box.textContent = text;
+    box.scrollIntoView({ block: "nearest" });
   }
 
   async function submitAuth(entry) {
     if (!entry.email) return showAccountError("Enter an email or username.");
     if (entry.password.length < 8) return showAccountError("Use at least 8 characters.");
     if (entry.mode === "create") {
-      if (!entry.ack) return showAccountError("Check the box to confirm you can remember this password. It cannot be reset.");
+      if (entry.recoveryEmail && !looksLikeEmail(entry.recoveryEmail)) return showAccountError("Enter a valid recovery email, or leave it blank.");
+      if (!entry.ack) return showAccountError("Check the box before creating the account.");
       if (entry.password !== entry.confirm) return showAccountError("Those passwords do not match.");
     }
     setFlash("pending", entry.mode === "create" ? "Creating account…" : "Signing in…");
     const result = entry.mode === "create"
-      ? await registerAccount(syncUrl, entry.email, entry.password)
+      ? await registerAccount(syncUrl, entry.email, entry.password, entry.recoveryEmail)
       : await loginAccount(syncUrl, entry.email, entry.password);
     if (!result.ok) return setFlash("error", result.error);
-    setSession(state, { token: result.token, email: result.email });
+    setSession(state, { token: result.token, email: result.email, recoveryEmail: result.recoveryEmail ?? null });
     const success = entry.mode === "create"
-      ? `Account created. You're signed in as ${result.email}. There is no way to reset this password — keep it somewhere safe.`
+      ? result.recoveryEmail
+        ? `Account created. You're signed in as ${result.email}. A reset link can be emailed to ${result.recoveryEmail}.`
+        : `Account created. You're signed in as ${result.email}. No recovery email is set, so a forgotten password cannot be recovered by email.`
       : `Signed in as ${result.email}. This device's log was merged with the server. Nothing was deleted just because one side was empty.`;
     setFlash("success", success);
     const synced = await sync.syncNow("auth");
     if (!synced.ok && state.session) {
       setFlash("success", `${success} Sync hasn't finished: ${synced.error}`);
     }
+  }
+
+  async function submitResetRequest(email) {
+    if (!email) return showAccountError("Enter the email or username on the account.");
+    setFlash("pending", "Sending a reset link…");
+    const result = await requestPasswordReset(syncUrl, email);
+    if (!result.ok) return setFlash("error", result.error);
+    setFlash("success", "If that account has a recovery email, a reset link is on its way.");
+  }
+
+  async function submitNewPassword(token, password, confirm) {
+    if (password.length < 8) return showAccountError("Use at least 8 characters.");
+    if (password !== confirm) return showAccountError("Those passwords do not match.");
+    setFlash("pending", "Updating password…");
+    const result = await confirmPasswordReset(syncUrl, token, password);
+    if (!result.ok) {
+      state.flash = { kind: "error", text: result.error };
+      renderResetError(result.error);
+      return;
+    }
+    history.replaceState(null, "", `${location.pathname}${location.search}#/account`);
+    setSession(state, { token: result.token, email: result.email, recoveryEmail: result.recoveryEmail ?? null });
+    const success = "Password updated. You're signed in on this device. Other devices need to sign in again. Your maintenance log was not changed.";
+    setFlash("success", success);
+    const synced = await sync.syncNow("auth");
+    if (!synced.ok && state.session) {
+      setFlash("success", `${success} Sync hasn't finished: ${synced.error}`);
+    }
+  }
+
+  function renderResetError(message) {
+    const main = document.querySelector("#main");
+    if (!main) return;
+    main.replaceChildren(wrap([
+      el("h1", {}, ["Choose a new password"]),
+      el("div", { id: "account-result", class: "flash error", role: "alert", "data-testid": "account-result" }, [message]),
+      el("p", { class: "lede" }, ["Ask for another link. The old one cannot be used again."]),
+      el("button", { type: "button", class: "button", onClick: () => openForgot() }, ["Send a new link"]),
+    ]));
+    main.scrollTop = 0;
+  }
+
+  let recoveryLookup = null;
+
+  function ensureRecoveryEmail() {
+    if (!state.session || "recoveryEmail" in state.session || recoveryLookup) return;
+    const token = state.session.token;
+    recoveryLookup = fetchAccount(syncUrl, token).then((result) => {
+      recoveryLookup = null;
+      if (!state.session || state.session.token !== token) return;
+      if (!result.ok) return;
+      setSession(state, { token, email: result.email || state.session.email, recoveryEmail: result.recoveryEmail });
+      if (parseRoute(location.hash).name === "account") renderMain();
+    });
+  }
+
+  async function saveRecoveryEmail(recoveryEmail, password) {
+    const token = state.session?.token;
+    if (!token) return;
+    setFlash("pending", "Saving recovery email…");
+    const result = await updateRecoveryEmail(syncUrl, token, password, recoveryEmail);
+    if (!result.ok) return setFlash("error", result.error);
+    if (state.session) setSession(state, { ...state.session, recoveryEmail: result.recoveryEmail });
+    setFlash("success", `Recovery email saved. A reset link can be emailed to ${result.recoveryEmail}.`);
   }
 
   function renderMore() {
@@ -1034,7 +1235,13 @@ function confirmDialog(title, body, confirmLabel, danger = true) {
   });
 }
 
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
 function parseRoute(hash) {
+  const reset = /^#reset=(.*)$/.exec(String(hash || ""));
+  if (reset) return { name: "reset", token: decodeURIComponent(reset[1]) };
   const [head, id, extra] = String(hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
   if (!head || head === "summary") return { name: "summary" };
   if (head === "upcoming") return { name: "upcoming" };

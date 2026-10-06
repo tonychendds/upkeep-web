@@ -22,7 +22,7 @@ The banner at the top stays visible.
 - Signed out: "Not signed in. This log stays on this device only."
 - Signed in: the account name, the last sync time, and any error. Sync now is always there.
 
-Create account shows a clear success only after the server returns a token, or the server's error if it does not. There is no password reset and no email confirmation. The create form says so, and the acknowledgement box has to be checked.
+Create account shows a clear success only after the server returns a token, or the server's error if it does not. A recovery email is optional and strongly encouraged. If the username is an email address, that address is the recovery email unless you clear it. Forgot password emails a one-time link to the recovery email. The link expires in 30 minutes. Resetting the password signs out every device and does not delete the maintenance log. Without a recovery email, a forgotten password cannot be recovered by email. The create form says so, and the acknowledgement box has to be checked.
 
 Sync runs when you open the app, when the tab becomes visible again, after each edit (short delay), and when you tap Sync now. A network failure leaves the on-device log alone.
 
