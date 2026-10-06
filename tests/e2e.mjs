@@ -38,6 +38,7 @@ try {
   const pointerEvents = await pageA.evaluate(() => getComputedStyle(document.querySelector("nav a svg")).pointerEvents);
   assert.equal(pointerEvents, "none");
   await assertNav(pageA);
+  await pageA.screenshot({ path: path.join(shots, "after_nav_iphone.png") });
   const icon = await pageA.evaluate(async () => {
     const img = document.querySelector(".brand img");
     await img.decode();
@@ -119,6 +120,8 @@ try {
   assert.equal(await pageA.getByLabel("Year built").inputValue(), "2019");
   assert.equal(await pageA.getByLabel("License plate").inputValue(), "8ABC123");
   assert.equal(await pageA.getByLabel("VIN").inputValue(), vin);
+  await pageA.getByText("Shows up as").waitFor();
+  await pageA.getByText("Brand, model, year, and plate build the name. A nickname replaces it.").waitFor();
   await pageA.getByRole("link", { name: "Car", exact: true }).click();
   assert.equal(await pageA.getByTestId("car-brand").innerText(), "Lexus");
   assert.equal(await pageA.getByTestId("car-model").innerText(), "RX");
@@ -313,11 +316,23 @@ try {
 
   await pageA.getByRole("link", { name: "Car", exact: true }).click();
   await pageA.getByRole("link", { name: "Add car" }).click();
+  await pageA.getByRole("heading", { name: "Add car" }).waitFor();
+  assert.equal(await pageA.getByText("Brand, model, year, and plate build the name. A nickname replaces it.").count(), 0);
+  assert.equal(await pageA.getByText("Shows up as").count(), 0);
+  assert.equal(await pageA.getByRole("button", { name: "Home", exact: true }).count(), 0);
+  assert.equal(await pageA.getByRole("button", { name: "Car", exact: true }).count(), 0);
+  await pageA.getByRole("button", { name: "Cancel" }).click();
+  await pageA.getByRole("heading", { name: "Car", exact: true }).waitFor();
+  await pageA.getByRole("link", { name: "Add car" }).click();
+  await pageA.getByRole("heading", { name: "Add car" }).waitFor();
+  await pageA.screenshot({ path: path.join(shots, "after_add_car_iphone.png") });
   await pageA.getByLabel("Brand").fill("Honda");
   await pageA.getByLabel("Model").fill("Civic");
   await pageA.getByLabel("Year built").fill("2018");
   await pageA.getByLabel("License plate").fill("7xyz999");
-  await saveAndSync(pageA, "Save asset");
+  await pageA.getByLabel("Nickname").fill("Errand car");
+  await pageA.getByLabel("Nickname").fill("");
+  await saveAndSync(pageA, "Add car");
   await pageA.getByRole("heading", { name: "Car", exact: true }).waitFor();
   await pageA.getByTestId("car-picker").waitFor();
   assert.equal(await pageA.getByTestId("car-plate").innerText(), "7XYZ999");
@@ -397,6 +412,12 @@ try {
   await empty.getByTestId("car-empty").waitFor();
   await empty.getByRole("link", { name: "Add car" }).waitFor();
   await empty.screenshot({ path: path.join(shots, "iphone_car_empty.png") });
+  await empty.getByRole("link", { name: "House", exact: true }).click();
+  await empty.getByRole("link", { name: "Add a home" }).click();
+  await empty.getByRole("heading", { name: "Add asset" }).waitFor();
+  await empty.getByRole("button", { name: "Home", exact: true }).waitFor();
+  await empty.getByRole("button", { name: "Car", exact: true }).waitFor();
+  await empty.getByText("Brand, model, year, and plate build the name. A nickname replaces it.").waitFor();
   await blank.close();
 
   await pageA.getByRole("link", { name: "More" }).click();
@@ -487,7 +508,7 @@ try {
 
 async function assertNav(page) {
   const labels = await page.locator("#nav a").allTextContents();
-  assert.deepEqual(labels.map((text) => text.replace(/\s+/g, " ").trim()), ["Summary", "House", "Car", "More"]);
+  assert.deepEqual(labels.map((text) => text.replace(/\s+/g, " ").trim()), ["Summary", "Car", "House", "More"]);
   assert.equal(await page.locator("#nav a svg").count(), 4);
   const paths = await page.locator("#nav a svg path").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("d")));
   assert.equal(new Set(paths).size, paths.length);
