@@ -523,8 +523,14 @@ export function parseBackup(text) {
 
 export function syncBaseFromLocation(locationLike) {
   try {
+    // Dev override only: never let a link point the live site's sign-in at another server.
     const value = new URL(locationLike.href).searchParams.get("sync");
-    if (value) return value.replace(/\/$/, "");
+    if (value) {
+      const target = new URL(value);
+      if (target.protocol === "http:" && (target.hostname === "127.0.0.1" || target.hostname === "localhost")) {
+        return value.replace(/\/$/, "");
+      }
+    }
   } catch {
     /* use the production worker */
   }
