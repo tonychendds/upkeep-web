@@ -1,0 +1,12 @@
+name = "upkeep-sync"
+main = "src/index.ts"
+compatibility_date = "2026-03-01"
+workers_dev = true
+
+# Database already created in the Cloudflare account.
+# Remote URL after deploy: https://upkeep-sync.tonychendds.workers.dev
+[[d1_databases]]
+binding = "DB"
+database_name = "upkeep-sync"
+database_id = "ef27fdaf-690d-490c-9f16-5b3a10f3b375"
+migrations_dir = "migrations"
