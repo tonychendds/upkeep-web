@@ -200,6 +200,67 @@ h2 { font-size: 22px; }
 
 .stack { display: flex; flex-direction: column; gap: 8px; }
 
+/* Summary: compact totals side by side, so more fits on a phone. */
+.figures.compact { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.figures.compact .figure { padding: 10px 12px; border-radius: 14px; }
+.figures.compact .figure-label {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.figures.compact .figure-value { margin-top: 2px; font-size: 24px; line-height: 1.15; }
+
+.summary-card { padding: 10px 12px; border-radius: 14px; }
+.summary-card h2 { font-size: 18px; }
+.summary-card > h2 { margin-bottom: 4px; }
+.summary-card .rowline { padding: 6px 0; font-size: 15px; }
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scheduled-total { margin: 2px 0 6px; font-size: 13px; }
+.scheduled-total strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+.upcoming-rows { display: flex; flex-direction: column; }
+
+.upcoming-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  padding: 7px 8px;
+  margin: 0 -8px;
+  width: calc(100% + 16px);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.upcoming-row:first-child { border-top: 0; }
+.upcoming-row.overdue { background: var(--overdue-soft); border-radius: 10px; }
+.upcoming-row.overdue + .upcoming-row { border-top-color: transparent; }
+
+.upcoming-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.upcoming-title { font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.upcoming-cost { font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.upcoming-meta { font-size: 13px; overflow-wrap: anywhere; }
+.pill.small { min-height: 20px; padding: 1px 6px; font-size: 10px; flex: none; }
+
 .rowline {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -440,6 +501,7 @@ dialog.modal::backdrop { background: rgba(36, 28, 20, 0.45); }
 
 @media (min-width: 720px) {
   .figures, .split, .filters { grid-template-columns: 1fr 1fr; }
+  .figures.compact .figure-value { font-size: 28px; }
   .filters .search { grid-column: 1 / -1; }
   .wrap { max-width: 880px; }
   .main { padding-left: 24px; padding-right: 24px; }
