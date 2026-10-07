@@ -165,13 +165,77 @@ export function mountApp(root, { state, sync, syncUrl }) {
       el("h1", {}, ["Summary"]),
       el("p", { class: "lede" }, ["Totals count completed jobs only. Scheduled work is not included."]),
       el("div", { class: "field month" }, [el("label", { for: "summary-month" }, ["Month"]), monthInput]),
-      el("div", { class: "figures" }, [
+      el("div", { class: "figures compact" }, [
         figure(formatMonth(summaryMonth), formatMoney(totals.monthCents), "month-total"),
         figure(summaryMonth.slice(0, 4), formatMoney(totals.yearCents), "year-total"),
       ]),
-      breakdown("By asset", totals.assets, "No assets yet."),
-      breakdown("By category", totals.categories, "No completed jobs in this year."),
+      summaryUpcoming(),
+      breakdown("By asset", totals.assets, "No assets yet.", true),
+      breakdown("By category", totals.categories, "No completed jobs in this year.", true),
       el("a", { class: "button", href: "#/jobs/new" }, [icon("plus"), "Log a job"]),
+    ]);
+  }
+
+  /** Upcoming work on Summary: the same items as the Car, House, and All upcoming lists, overdue first. */
+  function summaryUpcoming() {
+    const items = upcomingItems(state.records)
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => Number(right.item.overdue) - Number(left.item.overdue) || left.index - right.index)
+      .map(({ item }) => item);
+    const scheduledCents = items
+      .filter((item) => item.kind === "scheduled")
+      .reduce((total, item) => total + (item.job.payload?.costCents || 0), 0);
+    const head = el("div", { class: "section-head" }, [
+      el("h2", {}, ["Upcoming"]),
+      items.length ? el("a", { class: "text-link", href: "#/upcoming" }, ["See all"]) : null,
+    ]);
+    if (!items.length) {
+      return el("section", { class: "card summary-card", "data-testid": "summary-upcoming" }, [
+        head,
+        el("p", { class: "meta", "data-testid": "summary-upcoming-empty" }, ["Nothing upcoming. Scheduled jobs and next-due dates show up here."]),
+      ]);
+    }
+    const overdueCount = items.filter((item) => item.overdue).length;
+    return el("section", { class: "card summary-card", "data-testid": "summary-upcoming" }, [
+      head,
+      el("p", { class: "meta scheduled-total" }, [
+        "Scheduled cost ",
+        el("strong", { "data-testid": "scheduled-total" }, [formatMoney(scheduledCents)]),
+        " · not counted in spent totals",
+        overdueCount ? ` · ${overdueCount} overdue` : "",
+      ]),
+      el("div", { class: "upcoming-rows", "data-testid": "summary-upcoming-list" }, items.map((item) => upcomingRow(item))),
+    ]);
+  }
+
+  function upcomingRow(item) {
+    const payload = item.job.payload || {};
+    const when = item.kind === "mileage"
+      ? `Due at ${Number(payload.nextDueOdometer).toLocaleString("en-US")} mi`
+      : item.kind === "scheduled"
+        ? formatDate(item.date)
+        : `Due ${formatDate(item.date)}`;
+    const cost = payload.costCents == null
+      ? ""
+      : item.kind === "scheduled"
+        ? formatMoney(payload.costCents)
+        : `last ${formatMoney(payload.costCents)}`;
+    return el("button", {
+      type: "button",
+      class: item.overdue ? "upcoming-row overdue" : "upcoming-row",
+      "data-kind": item.kind,
+      "data-overdue": item.overdue ? "true" : "false",
+      "data-job-id": item.job.id,
+      onClick: () => { location.hash = `#/jobs/${item.job.id}`; },
+    }, [
+      el("span", { class: "upcoming-line" }, [
+        el("span", { class: "upcoming-title" }, [payload.title || "Job"]),
+        cost ? el("span", { class: "upcoming-cost" }, [cost]) : null,
+      ]),
+      el("span", { class: "upcoming-line meta" }, [
+        el("span", { class: "upcoming-meta" }, [`${assetLabel(state.records, payload.assetId)} · ${when}`]),
+        item.overdue ? el("span", { class: "pill overdue small" }, ["Overdue"]) : null,
+      ]),
     ]);
   }
 
@@ -1360,7 +1424,7 @@ function figure(label, value, testid) {
   ]);
 }
 
-function breakdown(title, rows, empty) {
+function breakdown(title, rows, empty, compact = false) {
   const body = rows.length
     ? [
       el("div", { class: "rowline head" }, [
@@ -1375,7 +1439,7 @@ function breakdown(title, rows, empty) {
       ])),
     ]
     : [el("p", { class: "lede" }, [empty])];
-  return el("section", { class: "card" }, [el("h2", {}, [title]), ...body]);
+  return el("section", { class: compact ? "card summary-card" : "card" }, [el("h2", {}, [title]), ...body]);
 }
 
 function labeled(text, control) {
