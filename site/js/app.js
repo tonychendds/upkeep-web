@@ -1,7 +1,10 @@
 import { syncBaseFromLocation } from "./model.js";
 import { loadState } from "./store.js";
+import { requestPersistentStorage } from "./storage-persist.js";
 import { createSync } from "./sync.js";
 import { mountApp } from "./ui.js";
+
+void requestPersistentStorage();
 
 const state = loadState();
 const syncUrl = syncBaseFromLocation(window.location);

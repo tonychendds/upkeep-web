@@ -26,6 +26,8 @@ Create account shows a clear success only after the server returns a token, or t
 
 Sync runs when you open the app, when the tab becomes visible again, after each edit (short delay), and when you tap Sync now. A network failure leaves the on-device log alone.
 
+When the browser supports it, the app asks to keep that on-device log (so Chrome is less likely to wipe the site). The request runs when you open the app, and again after you sign in or create an account. Browsers without that API are left alone.
+
 Records sync individually with `updatedAt` timestamps. A delete is a tombstone: an older copy on another device cannot bring it back. An empty device does not upload over the server. On sign-in, an untouched device just downloads. If both sides have data, they merge by record id.
 
 ## GitHub Pages

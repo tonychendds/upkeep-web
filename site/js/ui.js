@@ -29,6 +29,7 @@ import {
   upcomingItems,
 } from "./model.js";
 import { clearSession, deleteRecord, importRecords, saveRecord, setSession } from "./store.js";
+import { requestPersistentStorage } from "./storage-persist.js";
 import { confirmPasswordReset, fetchAccount, loginAccount, logoutAccount, registerAccount, requestPasswordReset, updateRecoveryEmail } from "./sync.js";
 
 const FORM_ROUTES = new Set(["job", "asset", "contractor"]);
@@ -1252,6 +1253,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       : await loginAccount(syncUrl, entry.email, entry.password);
     if (!result.ok) return setFlash("error", result.error);
     setSession(state, { token: result.token, email: result.email, recoveryEmail: result.recoveryEmail ?? null });
+    void requestPersistentStorage();
     const success = entry.mode === "create"
       ? result.recoveryEmail
         ? `Account created. You're signed in as ${result.email}. A reset link can be emailed to ${result.recoveryEmail}.`

@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/model.test.mjs && npm test --prefix worker && node tests/e2e.mjs",
-    "test:model": "node --test tests/model.test.mjs",
+    "test": "node --test tests/model.test.mjs tests/storage-persist.test.mjs && npm test --prefix worker && node tests/e2e.mjs",
+    "test:model": "node --test tests/model.test.mjs tests/storage-persist.test.mjs",
     "test:worker": "npm test --prefix worker",
     "test:e2e": "node tests/e2e.mjs"
   },
