@@ -2,6 +2,8 @@ const PAGES_ORIGIN = "https://tonychendds.github.io";
 const PBKDF2_ITERATIONS = 100_000;
 const MAX_BODY_BYTES = 2_000_000;
 const MAX_RECORDS = 2000;
+const MAX_PHOTO_BYTES = 1_000_000;
+const MAX_JOB_PHOTOS = 12;
 
 interface Env {
   DB: D1Database;
@@ -71,6 +73,11 @@ const worker = {
       if (request.method === "POST" && url.pathname === "/auth/reset-confirm") return cors(request, await resetConfirm(request, env));
       if (request.method === "GET" && url.pathname === "/sync") return cors(request, await pull(request, env));
       if (request.method === "POST" && url.pathname === "/sync") return cors(request, await push(request, env));
+      if (request.method === "GET" && url.pathname === "/photos") return cors(request, await listPhotos(request, env));
+      if (request.method === "POST" && url.pathname === "/photos") return cors(request, await createPhoto(request, env));
+      const photoMatch = /^\/photos\/([A-Za-z0-9:_-]{1,80})$/.exec(url.pathname);
+      if (photoMatch && request.method === "GET") return cors(request, await readPhoto(request, env, photoMatch[1]));
+      if (photoMatch && request.method === "DELETE") return cors(request, await removePhoto(request, env, photoMatch[1]));
       return cors(request, json({ error: "Not found." }, 404));
     } catch {
       return cors(request, json({ error: "The sync server could not finish that request." }, 500));
@@ -97,7 +104,7 @@ function cors(request: Request, response: Response): Response {
   if (origin && isAllowedOrigin(origin)) {
     headers.set("Access-Control-Allow-Origin", origin);
   }
-  headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
   headers.set("Access-Control-Max-Age", "86400");
   headers.set("Vary", "Origin");
@@ -387,19 +394,23 @@ async function push(request: Request, env: Env): Promise<Response> {
       .bind(userId, record.id)
       .first<RecordRow>();
     const resolved = resolveRecord(existing ? rowToRecord(existing) : null, record);
-    if (!resolved.changed) continue;
-    await env.DB.prepare(
-      "INSERT INTO records (user_id, id, type, updated_at, deleted, payload) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, id) DO UPDATE SET type = excluded.type, updated_at = excluded.updated_at, deleted = excluded.deleted, payload = excluded.payload",
-    )
-      .bind(
-        userId,
-        resolved.record.id,
-        resolved.record.type,
-        resolved.record.updatedAt,
-        resolved.record.deleted ? 1 : 0,
-        resolved.record.payload ? JSON.stringify(resolved.record.payload) : null,
+    if (resolved.changed) {
+      await env.DB.prepare(
+        "INSERT INTO records (user_id, id, type, updated_at, deleted, payload) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, id) DO UPDATE SET type = excluded.type, updated_at = excluded.updated_at, deleted = excluded.deleted, payload = excluded.payload",
       )
-      .run();
+        .bind(
+          userId,
+          resolved.record.id,
+          resolved.record.type,
+          resolved.record.updatedAt,
+          resolved.record.deleted ? 1 : 0,
+          resolved.record.payload ? JSON.stringify(resolved.record.payload) : null,
+        )
+        .run();
+    }
+    if (resolved.record.type === "job" && resolved.record.deleted) {
+      await tombstonePhotosForJob(env, userId, resolved.record.id);
+    }
   }
 
   return json({ records: await readAll(env, userId), serverTime: Date.now() });
@@ -508,6 +519,8 @@ function parsePayload(type: RecordType, raw: unknown): Record<string, unknown> |
     return null;
   }
   if (repeat === undefined) return null;
+  const photoIds = parsePhotoIds(value.photoIds);
+  if (!photoIds) return null;
   return {
     title,
     assetId,
@@ -522,7 +535,20 @@ function parsePayload(type: RecordType, raw: unknown): Record<string, unknown> |
     repeat,
     odometer,
     notes,
+    photoIds,
   };
+}
+
+function parsePhotoIds(value: unknown): string[] | null {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > MAX_JOB_PHOTOS) return null;
+  const ids: string[] = [];
+  for (const item of value) {
+    const id = idText(item);
+    if (!id || ids.includes(id)) return null;
+    ids.push(id);
+  }
+  return ids;
 }
 
 function parseAsset(value: Record<string, unknown>): Record<string, unknown> | null {
@@ -682,6 +708,133 @@ async function readObject(request: Request): Promise<{ ok: true; value: Record<s
   } catch {
     return { ok: false, error: "Expected JSON." };
   }
+}
+
+interface PhotoRow {
+  id: string;
+  job_id: string;
+  mime: string;
+  data: string | null;
+  created_at: number;
+  deleted: number;
+  updated_at: number;
+}
+
+async function listPhotos(request: Request, env: Env): Promise<Response> {
+  const userId = await userIdFromRequest(request, env);
+  if (!userId) return json({ error: "Sign in again." }, 401);
+  const result = await env.DB.prepare(
+    "SELECT id, job_id, mime, created_at, deleted, updated_at FROM photos WHERE user_id = ? ORDER BY created_at, id",
+  )
+    .bind(userId)
+    .all<PhotoRow>();
+  const photos = (result.results ?? []).map((row) => ({
+    id: row.id,
+    jobId: row.job_id,
+    mime: row.mime,
+    createdAt: row.created_at,
+    deleted: row.deleted === 1,
+    updatedAt: row.updated_at,
+  }));
+  return json({ photos });
+}
+
+async function readPhoto(request: Request, env: Env, id: string): Promise<Response> {
+  const userId = await userIdFromRequest(request, env);
+  if (!userId) return json({ error: "Sign in again." }, 401);
+  const row = await photoRow(env, userId, id);
+  if (!row) return json({ error: "Photo not found." }, 404);
+  return json(photoJson(row, true));
+}
+
+async function createPhoto(request: Request, env: Env): Promise<Response> {
+  const userId = await userIdFromRequest(request, env);
+  if (!userId) return json({ error: "Sign in again." }, 401);
+  const body = await readObject(request);
+  if (!body.ok) return json({ error: body.error }, 400);
+  const id = idText(body.value.id);
+  const jobId = idText(body.value.jobId);
+  if (!id || !jobId) return json({ error: "Photo id is not valid." }, 400);
+  const existing = await photoRow(env, userId, id);
+  if (existing?.deleted === 1) return json(photoJson(existing, false));
+  if (existing) return json(photoJson(existing, false));
+  if (body.value.mime !== "image/jpeg") return json({ error: "Receipt photos must be JPEG." }, 400);
+  const createdAt = body.value.createdAt;
+  if (typeof createdAt !== "number" || !Number.isSafeInteger(createdAt) || createdAt < 1) {
+    return json({ error: "Photo is missing a timestamp." }, 400);
+  }
+  const sized = photoByteLength(body.value.data);
+  if (!sized.ok) return json({ error: sized.error }, 400);
+  const job = await env.DB.prepare("SELECT deleted FROM records WHERE user_id = ? AND id = ? AND type = 'job'")
+    .bind(userId, jobId)
+    .first<{ deleted: number }>();
+  const deleted = job?.deleted === 1;
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO photos (user_id, id, job_id, mime, data, created_at, deleted, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  )
+    .bind(userId, id, jobId, "image/jpeg", deleted ? null : String(body.value.data), createdAt, deleted ? 1 : 0, now)
+    .run();
+  return json({ id, jobId, mime: "image/jpeg", createdAt, deleted, updatedAt: now }, 201);
+}
+
+async function removePhoto(request: Request, env: Env, id: string): Promise<Response> {
+  const userId = await userIdFromRequest(request, env);
+  if (!userId) return json({ error: "Sign in again." }, 401);
+  const existing = await photoRow(env, userId, id);
+  const now = Date.now();
+  if (!existing) {
+    await env.DB.prepare(
+      "INSERT INTO photos (user_id, id, job_id, mime, data, created_at, deleted, updated_at) VALUES (?, ?, ?, ?, NULL, ?, 1, ?)",
+    )
+      .bind(userId, id, "deleted", "", now, now)
+      .run();
+    return json({ id, jobId: "deleted", deleted: true, updatedAt: now });
+  }
+  if (existing.deleted !== 1) {
+    await env.DB.prepare("UPDATE photos SET deleted = 1, data = NULL, updated_at = ? WHERE user_id = ? AND id = ?")
+      .bind(now, userId, id)
+      .run();
+  }
+  return json({ id, jobId: existing.job_id, deleted: true, updatedAt: existing.deleted === 1 ? existing.updated_at : now });
+}
+
+async function tombstonePhotosForJob(env: Env, userId: string, jobId: string): Promise<void> {
+  await env.DB.prepare("UPDATE photos SET deleted = 1, data = NULL, updated_at = ? WHERE user_id = ? AND job_id = ? AND deleted = 0")
+    .bind(Date.now(), userId, jobId)
+    .run();
+}
+
+async function photoRow(env: Env, userId: string, id: string): Promise<PhotoRow | null> {
+  return env.DB.prepare(
+    "SELECT id, job_id, mime, data, created_at, deleted, updated_at FROM photos WHERE user_id = ? AND id = ?",
+  )
+    .bind(userId, id)
+    .first<PhotoRow>();
+}
+
+function photoJson(row: PhotoRow, includeData: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    id: row.id,
+    jobId: row.job_id,
+    mime: row.mime,
+    createdAt: row.created_at,
+    deleted: row.deleted === 1,
+    updatedAt: row.updated_at,
+  };
+  if (includeData) body.data = row.deleted === 1 ? null : row.data;
+  return body;
+}
+
+function photoByteLength(value: unknown): { ok: true; bytes: number } | { ok: false; error: string } {
+  if (typeof value !== "string" || !value) return { ok: false, error: "Photo data is missing." };
+  if (value.length > 1_400_000) return { ok: false, error: "Photo is over 1MB." };
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) return { ok: false, error: "Photo data is not valid." };
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const bytes = (value.length / 4) * 3 - padding;
+  if (bytes < 1) return { ok: false, error: "Photo data is missing." };
+  if (bytes > MAX_PHOTO_BYTES) return { ok: false, error: "Photo is over 1MB." };
+  return { ok: true, bytes };
 }
 
 async function hashPassword(password: string): Promise<{ hash: string; salt: string }> {

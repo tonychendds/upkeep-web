@@ -180,6 +180,80 @@ try {
   assert.equal(await pageA.getByTestId("car-month-total").innerText(), "$89.50");
   assert.equal(await pageA.getByTestId("car-year-total").innerText(), "$89.50");
 
+  await pageA.getByTestId("asset-job-list").getByRole("button", { name: /Oil change/ }).click();
+  await pageA.getByRole("heading", { name: "Edit job" }).waitFor();
+  await pageA.getByTestId("receipt-photos").waitFor();
+  assert.equal(await pageA.getByTestId("receipt-camera").getAttribute("accept"), "image/*");
+  assert.equal(await pageA.getByTestId("receipt-camera").getAttribute("capture"), "environment");
+  assert.equal(await pageA.getByTestId("receipt-gallery").getAttribute("accept"), "image/*");
+  assert.equal(await pageA.getByTestId("receipt-gallery").evaluate((node) => node.multiple), true);
+  const shrunk = await pageA.evaluate(async () => {
+    const { shrinkReceipt } = await import("./js/photo-file.js");
+    const canvas = document.createElement("canvas");
+    canvas.width = 1800;
+    canvas.height = 1200;
+    const context = canvas.getContext("2d");
+    const image = context.createImageData(canvas.width, canvas.height);
+    for (let index = 0; index < image.data.length; index += 16) {
+      image.data[index] = (index * 17) % 256;
+      image.data[index + 1] = (index * 9) % 256;
+      image.data[index + 2] = (index * 3) % 256;
+      image.data[index + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const jpeg = await shrinkReceipt(new File([blob], "big.png", { type: "image/png" }));
+    const bitmap = await createImageBitmap(jpeg);
+    return { size: jpeg.size, type: jpeg.type, width: bitmap.width, height: bitmap.height };
+  });
+  assert.equal(shrunk.type, "image/jpeg");
+  assert.ok(Math.max(shrunk.width, shrunk.height) <= 1600, JSON.stringify(shrunk));
+  assert.ok(shrunk.size <= 300 * 1024, JSON.stringify(shrunk));
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  await pageA.getByTestId("receipt-gallery").setInputFiles({ name: "receipt.png", mimeType: "image/png", buffer: png });
+  await pageA.getByRole("button", { name: "View receipt photo" }).waitFor();
+  await pageA.getByTestId("receipt-camera").setInputFiles({ name: "camera.png", mimeType: "image/png", buffer: png });
+  await pageA.getByRole("button", { name: "View receipt photo" }).nth(1).waitFor();
+  await pageA.getByTestId("receipt-mark").waitFor();
+  await pageA.getByRole("button", { name: "View receipt photo" }).first().click();
+  await pageA.getByRole("dialog").getByRole("img", { name: "Receipt photo" }).waitFor();
+  await pageA.getByRole("button", { name: "Close" }).click();
+  await pageA.getByRole("button", { name: "Remove photo" }).first().click();
+  assert.equal(await pageA.getByRole("button", { name: "View receipt photo" }).count(), 1);
+  await pageA.screenshot({ path: path.join(shots, "iphone_receipt_form.png") });
+  const photoUpload = pageA.waitForResponse((response) => response.url().endsWith("/photos") && response.request().method() === "POST" && response.ok());
+  await saveAndSync(pageA, "Save job");
+  await photoUpload;
+  const storedBook = await pageA.evaluate(() => localStorage.getItem("upkeep.data.v1") || "");
+  assert.equal(storedBook.includes("data:image"), false);
+  assert.match(storedBook, /photoIds/);
+  assert.ok(storedBook.length < 80_000, `sync book grew to ${storedBook.length}`);
+  await pageA.getByTestId("asset-job-list").getByTestId("receipt-mark").waitFor();
+
+  const offline = await browser.newContext({ ...iphone });
+  const pageC = await offline.newPage();
+  const photoCalls = [];
+  pageC.on("request", (request) => {
+    if (/\/photos(\/|$|\?)/.test(request.url())) photoCalls.push(`${request.method()} ${request.url()}`);
+  });
+  await pageC.goto(server.pageUrl);
+  await pageC.getByRole("link", { name: "House", exact: true }).click();
+  await pageC.getByRole("link", { name: "Log a job" }).click();
+  await pageC.getByLabel("What was done").fill("Filter change");
+  await pageC.getByLabel("Category", { exact: true }).selectOption({ label: "HVAC" });
+  await pageC.getByTestId("receipt-gallery").setInputFiles({ name: "offline.png", mimeType: "image/png", buffer: png });
+  await pageC.getByRole("button", { name: "View receipt photo" }).waitFor();
+  await pageC.getByRole("button", { name: "Save job" }).click();
+  await pageC.getByRole("heading", { name: "House", exact: true }).waitFor();
+  assert.deepEqual(photoCalls, []);
+  const offlineBook = await pageC.evaluate(() => localStorage.getItem("upkeep.data.v1") || "");
+  assert.equal(offlineBook.includes("data:image"), false);
+  await pageC.reload();
+  await pageC.getByRole("link", { name: "House", exact: true }).click();
+  await pageC.getByRole("button", { name: /Filter change/ }).click();
+  await pageC.getByRole("button", { name: "View receipt photo" }).waitFor();
+  await offline.close();
+
   await pageA.getByRole("link", { name: "House", exact: true }).click();
   await pageA.getByRole("heading", { name: "House", exact: true }).waitFor();
   await pageA.getByRole("link", { name: "Edit home" }).waitFor();
@@ -242,6 +316,7 @@ try {
   assert.equal(await pageB.getByLabel("VIN").inputValue(), vin);
   await pageB.getByRole("link", { name: "Car", exact: true }).click();
   await pageB.getByTestId("asset-job-list").getByRole("button", { name: /Oil change/ }).click();
+  await pageB.getByRole("button", { name: "View receipt photo" }).waitFor({ timeout: 15000 });
   await pageB.getByLabel("Asset", { exact: true }).waitFor();
   await pageB.getByLabel("Cost").fill("100");
   await saveAndSync(pageB, "Save job");

@@ -1,4 +1,5 @@
 export const DEFAULT_HOME_ID = "asset:home";
+export const MAX_JOB_PHOTOS = 12;
 export const SYNC_URL = "https://upkeep-sync.tonychendds.workers.dev";
 
 export const DEFAULT_CATEGORIES = [
@@ -247,7 +248,23 @@ function payloadError(type, payload) {
     if (unit === "months" && (every < 1 || every > 120)) return "Months must be between 1 and 120.";
     if (unit === "miles" && (every < 1 || every > 1_000_000)) return "Miles must be between 1 and 1,000,000.";
   }
+  if (payload.photoIds != null && !photoIdsOk(payload.photoIds)) return "Receipt photos are not valid.";
   return "";
+}
+
+export function photoIdsOf(payload) {
+  if (!payload || !Array.isArray(payload.photoIds)) return [];
+  return photoIdsOk(payload.photoIds) ? payload.photoIds.slice() : [];
+}
+
+function photoIdsOk(value) {
+  if (!Array.isArray(value) || value.length > MAX_JOB_PHOTOS) return false;
+  const seen = new Set();
+  for (const id of value) {
+    if (!idOk(id) || seen.has(id)) return false;
+    seen.add(id);
+  }
+  return true;
 }
 
 function requiredText(value, max) {

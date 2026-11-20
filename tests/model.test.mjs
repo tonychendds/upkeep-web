@@ -8,6 +8,7 @@ import {
   mergeWithServer,
   normalizeAssetPayload,
   parseBackup,
+  photoIdsOf,
   recordError,
   recordsToPush,
   seedHome,
@@ -91,6 +92,21 @@ test("totals ignore scheduled jobs and upcoming marks overdue dates", () => {
   const csv = toCsv(records);
   assert.match(csv, /License plate/);
   assert.match(csv, /Oil change/);
+});
+
+test("jobs can reference receipt photos by id without storing the image", () => {
+  const plain = job("job-1", "2026-10-02", 100);
+  assert.equal(recordError(plain), "");
+  assert.deepEqual(photoIdsOf(plain.payload), []);
+  const withPhotos = job("job-2", "2026-10-02", 100, { photoIds: ["photo-1", "photo-2"] });
+  assert.equal(recordError(withPhotos), "");
+  assert.deepEqual(photoIdsOf(withPhotos.payload), ["photo-1", "photo-2"]);
+  assert.match(recordError(job("job-3", "2026-10-02", 100, { photoIds: ["bad id"] })), /Receipt photos/);
+  assert.match(recordError(job("job-4", "2026-10-02", 100, { photoIds: "photo-1" })), /Receipt photos/);
+  const book = { home: seedHome(), [withPhotos.id]: withPhotos };
+  const pushed = JSON.stringify(recordsToPush(book));
+  assert.match(pushed, /photo-1/);
+  assert.doesNotMatch(pushed, /data:image|base64/);
 });
 
 test("backup import keeps car fields and merges by id", () => {

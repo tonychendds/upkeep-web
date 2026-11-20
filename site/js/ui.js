@@ -16,10 +16,12 @@ import {
   formatSynced,
   jobsUsing,
   liveRecords,
+  MAX_JOB_PHOTOS,
   newId,
   normalizeAssetPayload,
   parseBackup,
   parseMoney,
+  photoIdsOf,
   recordError,
   repeatPresets,
   summarize,
@@ -28,6 +30,8 @@ import {
   todayISO,
   upcomingItems,
 } from "./model.js";
+import { shrinkReceipt } from "./photo-file.js";
+import { commitJobPhotos, ensurePhotos, loadJobPhotos, tombstoneJobPhotos } from "./photos.js";
 import { clearSession, deleteRecord, importRecords, saveRecord, setSession } from "./store.js";
 import { requestPersistentStorage } from "./storage-persist.js";
 import { confirmPasswordReset, fetchAccount, loginAccount, logoutAccount, registerAccount, requestPasswordReset, updateRecoveryEmail } from "./sync.js";
@@ -230,7 +234,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       onClick: () => { location.hash = `#/jobs/${item.job.id}`; },
     }, [
       el("span", { class: "upcoming-line" }, [
-        el("span", { class: "upcoming-title" }, [payload.title || "Job"]),
+        el("span", { class: "upcoming-title" }, [payload.title || "Job", receiptMark(payload)]),
         cost ? el("span", { class: "upcoming-cost" }, [cost]) : null,
       ]),
       el("span", { class: "upcoming-line meta" }, [
@@ -265,7 +269,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       onClick: () => { location.hash = `#/jobs/${item.job.id}`; },
     }, [
       el("span", { class: `pill ${item.overdue ? "overdue" : item.kind}` }, [kind]),
-      el("span", { class: "card-title" }, [payload.title || "Job"]),
+      el("span", { class: "card-title" }, [payload.title || "Job", receiptMark(payload)]),
       el("span", { class: "meta" }, [`${assetLabel(state.records, payload.assetId)} · ${when}`]),
     ]);
   }
@@ -322,7 +326,7 @@ export function mountApp(root, { state, sync, syncUrl }) {
       onClick: () => { location.hash = `#/jobs/${job.id}`; },
     }, [
       el("span", { class: `pill ${payload.status === "done" ? "done" : "scheduled"}` }, [payload.status === "done" ? "Done" : "Scheduled"]),
-      el("span", { class: "card-title" }, [payload.title]),
+      el("span", { class: "card-title" }, [payload.title, receiptMark(payload)]),
       el("span", { class: "meta" }, [`${formatDate(payload.date)} · ${assetLabel(state.records, payload.assetId)} · ${categoryLabel(state.records, payload.categoryId)}`]),
       el("span", {}, [cost]),
     ]);
@@ -664,6 +668,134 @@ export function mountApp(root, { state, sync, syncUrl }) {
     );
     odometerWrap.append(labeled("Odometer", odometer));
 
+    const draftPhotos = [];
+    const strip = el("div", { class: "photo-strip", "data-testid": "receipt-strip" });
+    const detailMark = el("span", {
+      class: "receipt-mark",
+      "data-testid": "receipt-mark",
+      hidden: photoIdsOf(payload).length === 0,
+      title: "Has a receipt photo",
+    }, [icon("paperclip"), el("span", { class: "sr-only" }, ["Has a receipt photo"])]);
+    const camera = el("input", {
+      type: "file",
+      accept: "image/*",
+      capture: "environment",
+      hidden: true,
+      "data-testid": "receipt-camera",
+    });
+    const gallery = el("input", {
+      type: "file",
+      accept: "image/*",
+      multiple: true,
+      hidden: true,
+      "data-testid": "receipt-gallery",
+    });
+    function livePhotos() {
+      return draftPhotos.filter((photo) => !photo.removed);
+    }
+    function paintPhotos() {
+      const live = livePhotos();
+      detailMark.hidden = live.length === 0;
+      strip.replaceChildren(...live.map((photo) => {
+        const view = photo.url
+          ? el("button", {
+            type: "button",
+            class: "thumb",
+            "aria-label": "View receipt photo",
+            onClick: () => openPhoto(photo.url),
+          }, [el("img", { src: photo.url, alt: "" })])
+          : el("div", { class: "photo-missing" }, ["Photo syncing"]);
+        const remove = el("button", {
+          type: "button",
+          class: "photo-remove",
+          onClick: () => {
+            photo.removed = true;
+            if (photo.url) URL.revokeObjectURL(photo.url);
+            paintPhotos();
+          },
+        }, ["Remove photo"]);
+        return el("div", { class: "photo-tile", "data-photo-id": photo.id }, [view, remove]);
+      }));
+    }
+    async function addReceiptFiles(fileList) {
+      const files = [...(fileList || [])];
+      if (!files.length) return;
+      showError("");
+      for (const file of files) {
+        if (livePhotos().length >= MAX_JOB_PHOTOS) {
+          showError(`A job can have up to ${MAX_JOB_PHOTOS} receipt photos.`);
+          break;
+        }
+        try {
+          const blob = await shrinkReceipt(file);
+          draftPhotos.push({
+            id: newId(),
+            blob,
+            url: URL.createObjectURL(blob),
+            createdAt: Date.now(),
+            removed: false,
+            stored: false,
+          });
+          paintPhotos();
+        } catch (fileError) {
+          showError(fileError instanceof Error ? fileError.message : "That photo could not be saved.");
+        }
+      }
+    }
+    camera.addEventListener("change", () => {
+      void addReceiptFiles(camera.files);
+      camera.value = "";
+    });
+    gallery.addEventListener("change", () => {
+      void addReceiptFiles(gallery.files);
+      gallery.value = "";
+    });
+    let photosFailed = false;
+    const photosReady = (async () => {
+      const ids = photoIdsOf(payload);
+      if (!ids.length) return;
+      if (state.session) {
+        try {
+          await ensurePhotos(syncUrl, state.session.token, ids);
+        } catch {
+          /* Show whatever is already on this device. */
+        }
+      }
+      const rows = await loadJobPhotos(ids);
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      for (const id of ids) {
+        const row = byId.get(id);
+        if (row?.deleted) {
+          draftPhotos.push({ id, blob: null, url: "", createdAt: row.createdAt, removed: true, stored: true });
+          continue;
+        }
+        const blob = row?.blob || null;
+        draftPhotos.push({
+          id,
+          blob,
+          url: blob ? URL.createObjectURL(blob) : "",
+          createdAt: row?.createdAt || Date.now(),
+          removed: false,
+          stored: Boolean(row),
+        });
+      }
+      paintPhotos();
+    })().catch(() => {
+      photosFailed = true;
+      showError("Receipt photos could not be loaded. They were not removed.");
+    });
+    const receiptSection = el("section", { class: "field", "data-testid": "receipt-photos" }, [
+      el("label", {}, ["Receipt photos"]),
+      el("div", { class: "photo-actions" }, [
+        el("button", { type: "button", class: "button secondary", onClick: () => camera.click() }, ["Take photo"]),
+        el("button", { type: "button", class: "button secondary", onClick: () => gallery.click() }, ["Choose photo"]),
+      ]),
+      camera,
+      gallery,
+      strip,
+      el("p", { class: "hint" }, ["Kept on this device. Signed-in photos also sync to your other devices."]),
+    ]);
+
     const assetField = labeled("Asset", assetSelect);
     const lockAsset = !existing && route.assetId && assets.some((asset) => asset.id === route.assetId);
     if (lockAsset) assetField.hidden = true;
@@ -686,79 +818,101 @@ export function mountApp(root, { state, sync, syncUrl }) {
       hint,
       odometerWrap,
       labeled("Notes", notes),
+      receiptSection,
       el("button", { type: "submit", class: "button" }, ["Save job"]),
     );
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      showError("");
-      const assetId = assetSelect.value;
-      const assetType = selectedType();
-      let categoryId = categorySelect.value;
-      if (!categoryId) return showError("Choose a category.");
-      if (categoryId === "__new") {
-        const name = newCategory.value.trim();
-        if (!name) return showError("Name the new category.");
-        categoryId = newId();
-        const category = { id: categoryId, type: "category", updatedAt: Date.now(), deleted: false, payload: { name, assetType } };
-        const problem = recordError(category);
-        if (problem) return showError(problem);
-        saveRecord(state, category);
-      }
-      let contractorId = contractorSelect.value === "none" ? null : contractorSelect.value;
-      if (contractorSelect.value === "__new") {
-        const name = contractorName.value.trim();
-        if (!name) return showError("Name the contractor.");
-        contractorId = newId();
-        const contractor = {
-          id: contractorId,
-          type: "contractor",
+      void saveJob();
+    });
+
+    let savingJob = false;
+    async function saveJob() {
+      if (savingJob) return;
+      savingJob = true;
+      try {
+        showError("");
+        await photosReady;
+        if (photosFailed) return showError("Receipt photos could not be loaded. They were not removed.");
+        const assetId = assetSelect.value;
+        const assetType = selectedType();
+        let categoryId = categorySelect.value;
+        if (!categoryId) return showError("Choose a category.");
+        if (categoryId === "__new") {
+          const name = newCategory.value.trim();
+          if (!name) return showError("Name the new category.");
+          categoryId = newId();
+          const category = { id: categoryId, type: "category", updatedAt: Date.now(), deleted: false, payload: { name, assetType } };
+          const problem = recordError(category);
+          if (problem) return showError(problem);
+          saveRecord(state, category);
+        }
+        let contractorId = contractorSelect.value === "none" ? null : contractorSelect.value;
+        if (contractorSelect.value === "__new") {
+          const name = contractorName.value.trim();
+          if (!name) return showError("Name the contractor.");
+          contractorId = newId();
+          const contractor = {
+            id: contractorId,
+            type: "contractor",
+            updatedAt: Date.now(),
+            deleted: false,
+            payload: { name, phone: contractorPhone.value.trim(), email: contractorEmail.value.trim() },
+          };
+          const problem = recordError(contractor);
+          if (problem) return showError(problem);
+          saveRecord(state, contractor);
+        }
+        const costCents = parseMoney(cost.value);
+        if (costCents === undefined) return showError("Enter the cost in dollars, like 89.50, or leave it blank.");
+        const interval = readRepeat();
+        if (interval === undefined) {
+          const custom = repeat.value === "months:custom" || repeat.value === "miles:custom";
+          return showError(custom ? "Enter how many as a whole number, at least 1." : "Enter how often this repeats.");
+        }
+        let miles = null;
+        if (assetType === "car" && odometer.value.trim()) {
+          if (!/^\d+$/.test(odometer.value.trim())) return showError("Odometer should be a whole number of miles.");
+          miles = Number(odometer.value.trim());
+        }
+        const keep = livePhotos();
+        if (keep.length > MAX_JOB_PHOTOS) return showError(`A job can have up to ${MAX_JOB_PHOTOS} receipt photos.`);
+        const job = {
+          id: existing?.id || newId(),
+          type: "job",
           updatedAt: Date.now(),
           deleted: false,
-          payload: { name, phone: contractorPhone.value.trim(), email: contractorEmail.value.trim() },
+          payload: {
+            title: title.value.trim(),
+            assetId,
+            categoryId,
+            location: where.value.trim(),
+            contractorId,
+            costCents,
+            status,
+            date: date.value,
+            nextDueDate: nextDue.value || null,
+            nextDueOdometer: interval?.unit === "miles" && miles != null ? miles + interval.every : null,
+            repeat: interval,
+            odometer: miles,
+            notes: notes.value.trim(),
+            photoIds: keep.map((photo) => photo.id),
+          },
         };
-        const problem = recordError(contractor);
+        const problem = recordError(job);
         if (problem) return showError(problem);
-        saveRecord(state, contractor);
+        try {
+          await commitJobPhotos(job.id, keep.filter((photo) => photo.blob), draftPhotos.filter((photo) => photo.removed));
+        } catch (saveError) {
+          return showError(saveError instanceof Error ? saveError.message : "This device could not save the photo.");
+        }
+        saveRecord(state, job);
+        sync.schedule();
+        go(sectionForAsset(assetId));
+      } finally {
+        savingJob = false;
       }
-      const costCents = parseMoney(cost.value);
-      if (costCents === undefined) return showError("Enter the cost in dollars, like 89.50, or leave it blank.");
-      const interval = readRepeat();
-      if (interval === undefined) {
-        const custom = repeat.value === "months:custom" || repeat.value === "miles:custom";
-        return showError(custom ? "Enter how many as a whole number, at least 1." : "Enter how often this repeats.");
-      }
-      let miles = null;
-      if (assetType === "car" && odometer.value.trim()) {
-        if (!/^\d+$/.test(odometer.value.trim())) return showError("Odometer should be a whole number of miles.");
-        miles = Number(odometer.value.trim());
-      }
-      const job = {
-        id: existing?.id || newId(),
-        type: "job",
-        updatedAt: Date.now(),
-        deleted: false,
-        payload: {
-          title: title.value.trim(),
-          assetId,
-          categoryId,
-          location: where.value.trim(),
-          contractorId,
-          costCents,
-          status,
-          date: date.value,
-          nextDueDate: nextDue.value || null,
-          nextDueOdometer: interval?.unit === "miles" && miles != null ? miles + interval.every : null,
-          repeat: interval,
-          odometer: miles,
-          notes: notes.value.trim(),
-        },
-      };
-      const problem = recordError(job);
-      if (problem) return showError(problem);
-      saveRecord(state, job);
-      sync.schedule();
-      go(sectionForAsset(assetId));
-    });
+    }
 
     const extra = [];
     if (existing && payload.status === "done" && (payload.nextDueDate || payload.nextDueOdometer || payload.repeat)) {
@@ -768,7 +922,10 @@ export function mountApp(root, { state, sync, syncUrl }) {
       extra.push(el("button", { type: "button", class: "button danger", onClick: () => void removeJob(existing) }, ["Delete job"]));
     }
     return wrap([
-      el("h1", {}, [existing ? "Edit job" : "Log a job"]),
+      el("div", { class: "page-head" }, [
+        el("h1", {}, [existing ? "Edit job" : "Log a job"]),
+        detailMark,
+      ]),
       el("p", { class: "lede" }, ["Where it happened, who did it, what it cost, and when it should happen again."]),
       form,
       ...extra,
@@ -812,6 +969,11 @@ export function mountApp(root, { state, sync, syncUrl }) {
   async function removeJob(job) {
     const ok = await confirmDialog("Delete this job?", "It stays deleted on your other devices after sync. This does not erase the rest of the log.", "Delete job");
     if (!ok) return;
+    try {
+      await tombstoneJobPhotos(job.id);
+    } catch {
+      /* The job tombstone still removes the photo on the server at the next sync. */
+    }
     deleteRecord(state, job.id);
     sync.schedule();
     go(sectionForAsset(job.payload?.assetId));
@@ -1498,6 +1660,33 @@ function confirmDialog(title, body, confirmLabel, danger = true) {
     document.body.append(dialog);
     dialog.showModal();
   });
+}
+
+function receiptMark(payload) {
+  const count = photoIdsOf(payload).length;
+  if (!count) return null;
+  const label = count === 1 ? "Has a receipt photo" : `Has ${count} receipt photos`;
+  return el("span", { class: "receipt-mark", "data-testid": "receipt-mark", title: label }, [
+    icon("paperclip"),
+    el("span", { class: "sr-only" }, [label]),
+  ]);
+}
+
+function openPhoto(url) {
+  const dialog = el("dialog", { class: "modal viewer" });
+  const close = el("button", { type: "button", class: "button secondary" }, ["Close"]);
+  dialog.append(el("img", { src: url, alt: "Receipt photo" }), close);
+  const finish = () => {
+    dialog.close();
+    dialog.remove();
+  };
+  close.addEventListener("click", finish);
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    finish();
+  });
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 function looksLikeEmail(value) {
