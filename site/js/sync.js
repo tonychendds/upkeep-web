@@ -1,4 +1,5 @@
 import { recordsToPush } from "./model.js";
+import { syncPhotoStore } from "./photos.js";
 import { applyServerRecords, clearSession, persist } from "./store.js";
 
 export function createSync(state, syncUrl, hooks) {
@@ -70,6 +71,14 @@ export function createSync(state, syncUrl, hooks) {
       state.syncError = null;
       state.syncing = false;
       applyServerRecords(state, body.records);
+      try {
+        await syncPhotoStore(syncUrl, state.session.token);
+      } catch (error) {
+        state.syncError = error instanceof Error && error.message
+          ? error.message
+          : "Photos didn't finish syncing. They're still saved on this device.";
+        persist(state);
+      }
       hooks.onStatus?.();
       hooks.onData?.();
       return { ok: true };

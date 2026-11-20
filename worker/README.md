@@ -22,7 +22,7 @@ npx wrangler secret put RESET_RELAY_SECRET
 npx wrangler deploy
 ```
 
-Apply migrations before the first deploy, and again whenever `migrations/` changes. `0002_recovery.sql` adds a nullable `recovery_email` column and the reset-token tables. Existing users and maintenance records are left as they are.
+Apply migrations before the first deploy, and again whenever `migrations/` changes. `0002_recovery.sql` adds a nullable `recovery_email` column and the reset-token tables. `0003_photos.sql` adds the `photos` table for receipt images. Existing users, sessions, and maintenance records are left as they are.
 
 `RESET_RELAY_URL` and `RESET_RELAY_SECRET` are Worker secrets, not checked-in config. `wrangler secret put` prompts for each value. The URL is the Google Apps Script web app that sends mail from Tony's Gmail. The secret is the shared string that script expects. Until both are set, reset requests still return the generic message and log that the relay was skipped (`npx wrangler tail`).
 
@@ -54,7 +54,22 @@ npx wrangler dev
 - `POST /auth/reset-confirm` with `{ "token", "password" }` sets the new password, deletes every session for that account, and returns a new bearer token. The maintenance log is not modified.
 - `POST /sync` with `{ "records": [...] }` upserts those records and returns the full set. An empty `records` array only reads. It does not delete anything.
 - `GET /sync` reads every record for the signed-in account.
+- `POST /photos` uploads one JPEG for the signed-in user: `{ id, jobId, mime: "image/jpeg", data, createdAt }`. `data` is base64. Decoded bytes over 1MB are rejected. Image bytes are not accepted on `/sync`.
+- `GET /photos` lists photo metadata only (no bytes): `{ id, jobId, mime, createdAt, deleted, updatedAt }`.
+- `GET /photos/:id` returns one photo, including base64 `data` when it is not deleted.
+- `DELETE /photos/:id` tombstones that photo. A later upload of the same id does not bring it back.
+
+Jobs reference photos by id in `payload.photoIds`. Deleting a job tombstones its photos. A photo row stays in `photos` and is never put in the `records` book.
 
 Each record is `{ id, type, updatedAt, deleted, payload }`. `type` is `asset`, `category`, `contractor`, or `job`. A delete is stored as `deleted: true` and is never removed. A later push of a live copy does not bring it back.
+
+Migration `0003_photos.sql` adds the `photos` table. Apply it before deploying this version of the worker:
+
+```bash
+npx wrangler d1 migrations apply upkeep-sync --remote
+npx wrangler deploy
+```
+
+Database name `upkeep-sync`, id `ef27fdaf-690d-490c-9f16-5b3a10f3b375`.
 
 Last-write-wins applies to live edits (`updatedAt`, milliseconds). CORS allows `https://tonychendds.github.io` plus `http://localhost` and `http://127.0.0.1` for development.

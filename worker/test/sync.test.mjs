@@ -15,7 +15,7 @@ import { startRelay } from "./relay.mjs";
 const execFileAsync = promisify(execFile);
 const workerDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-test("register, login, per-record sync, tombstones, and CORS", { timeout: 180000 }, async () => {
+test("register, login, per-record sync, tombstones, photos, and CORS", { timeout: 240000 }, async () => {
   const server = await startWorker();
   try {
     const origin = "https://tonychendds.github.io";
@@ -141,7 +141,7 @@ test("register, login, per-record sync, tombstones, and CORS", { timeout: 180000
     assert.equal(limited.status, 200);
     assert.equal((await limited.json()).message, message);
     assert.equal(server.relay.requests.length, before + 3);
-    assert.match(server.logs(), /rate limit/);
+    await waitForLog(server, /rate limit/);
 
     const confirmed = await server.request("/auth/reset-confirm", { method: "POST", body: { token: resetToken, password: "brand-new-password" } });
     assert.equal(confirmed.status, 200);
@@ -187,11 +187,11 @@ test("register, login, per-record sync, tombstones, and CORS", { timeout: 180000
     server.relay.setMode("fail");
     const failed = await server.request("/auth/reset-request", { method: "POST", body: { email: "tony@example.com" } });
     assert.equal((await failed.json()).message, message);
-    assert.match(server.logs(), /relay failed/);
+    await waitForLog(server, /relay failed/);
     server.relay.setMode("down");
     const down = await server.request("/auth/reset-request", { method: "POST", body: { email: "tony@example.com" } });
     assert.equal((await down.json()).message, message);
-    assert.match(server.logs(), /relay unreachable/);
+    await waitForLog(server, /relay unreachable/);
     server.relay.setMode("ok");
 
     const wrongPassword = await server.request("/auth/recovery-email", {
@@ -212,10 +212,99 @@ test("register, login, per-record sync, tombstones, and CORS", { timeout: 180000
     await server.request("/auth/reset-request", { method: "POST", body: { email: "tony@example.com" } });
     assert.equal(server.relay.requests.at(-1).to, "other@example.com");
     assert.equal(server.relay.requests.length, previous + 1);
+
+    const receiptJob = job("job-receipt", 90);
+    receiptJob.payload.photoIds = ["photo-1", "photo-2"];
+    assert.equal((await server.sync(resetSession.token, [receiptJob])).status, 200);
+    const bytes = Buffer.from("receipt-bytes").toString("base64");
+    const unauth = await server.request("/photos", {
+      method: "POST",
+      body: { id: "photo-1", jobId: "job-receipt", mime: "image/jpeg", data: bytes, createdAt: 100 },
+    });
+    assert.equal(unauth.status, 401);
+
+    const uploaded = await server.request("/photos", {
+      method: "POST",
+      token: resetSession.token,
+      body: { id: "photo-1", jobId: "job-receipt", mime: "image/jpeg", data: bytes, createdAt: 100 },
+    });
+    assert.equal(uploaded.status, 201);
+    assert.equal((await uploaded.json()).data, undefined);
+
+    const fetched = await (await server.request("/photos/photo-1", { token: resetSession.token })).json();
+    assert.equal(fetched.data, bytes);
+    assert.equal(fetched.deleted, false);
+    const replaced = await (await server.request("/photos", {
+      method: "POST",
+      token: resetSession.token,
+      body: { id: "photo-1", jobId: "job-receipt", mime: "image/jpeg", data: Buffer.from("different").toString("base64"), createdAt: 101 },
+    })).json();
+    assert.equal(replaced.deleted, false);
+    assert.equal((await (await server.request("/photos/photo-1", { token: resetSession.token })).json()).data, bytes);
+
+    const listed = await (await server.request("/photos", { token: resetSession.token })).json();
+    assert.equal(listed.photos.some((photo) => photo.id === "photo-1" && photo.deleted === false), true);
+    assert.equal(Object.hasOwn(listed.photos[0], "data"), false);
+    assert.equal(JSON.stringify(listed).includes(bytes), false);
+    assert.equal((await server.request("/photos/photo-1", { token: otherToken })).status, 404);
+
+    const book = await (await server.sync(resetSession.token, [])).json();
+    assert.equal(JSON.stringify(book).includes(bytes), false);
+    assert.deepEqual(book.records.find((record) => record.id === "job-receipt").payload.photoIds, ["photo-1", "photo-2"]);
+    assert.equal((await server.request("/photos", {
+      method: "POST",
+      token: resetSession.token,
+      body: { id: "photo-png", jobId: "job-receipt", mime: "image/png", data: bytes, createdAt: 102 },
+    })).status, 400);
+    const tooBig = Buffer.alloc(1_000_001, 7).toString("base64");
+    const oversized = await server.request("/photos", {
+      method: "POST",
+      token: resetSession.token,
+      body: { id: "photo-big", jobId: "job-receipt", mime: "image/jpeg", data: tooBig, createdAt: 103 },
+    });
+    assert.equal(oversized.status, 400);
+    assert.match((await oversized.json()).error, /1MB/);
+
+    const secondPhoto = Buffer.from("second-receipt").toString("base64");
+    assert.equal((await server.request("/photos", {
+      method: "POST",
+      token: resetSession.token,
+      body: { id: "photo-2", jobId: "job-receipt", mime: "image/jpeg", data: secondPhoto, createdAt: 104 },
+    })).status, 201);
+    await server.sync(resetSession.token, []);
+    const kept = await (await server.request("/photos/photo-2", { token: resetSession.token })).json();
+    assert.equal(kept.deleted, false);
+    assert.equal(kept.data, secondPhoto);
+
+    assert.equal((await server.request("/photos/photo-1", { method: "DELETE", token: resetSession.token })).status, 200);
+    const tombstoned = await (await server.request("/photos/photo-1", { token: resetSession.token })).json();
+    assert.equal(tombstoned.deleted, true);
+    assert.equal(tombstoned.data, null);
+    const revived = await (await server.request("/photos", {
+      method: "POST",
+      token: resetSession.token,
+      body: { id: "photo-1", jobId: "job-receipt", mime: "image/jpeg", data: bytes, createdAt: 105 },
+    })).json();
+    assert.equal(revived.deleted, true);
+    assert.equal((await (await server.request("/photos/photo-1", { token: resetSession.token })).json()).data, null);
+
+    await server.sync(resetSession.token, [{ ...receiptJob, deleted: true, updatedAt: 200 }]);
+    const jobGone = await (await server.request("/photos/photo-2", { token: resetSession.token })).json();
+    assert.equal(jobGone.deleted, true);
+    assert.equal(jobGone.data, null);
   } finally {
     await server.stop();
   }
 });
+
+async function waitForLog(server, pattern) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (pattern.test(server.logs())) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.match(server.logs(), pattern);
+}
 
 function job(id, updatedAt) {
   return {
