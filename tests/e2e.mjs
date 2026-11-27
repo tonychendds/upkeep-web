@@ -273,9 +273,23 @@ try {
   await pageA.screenshot({ path: path.join(shots, "iphone_house.png") });
 
   await pageA.getByRole("link", { name: "Summary", exact: true }).click();
-  assert.equal(await pageA.getByTestId("month-total").innerText(), "$89.50");
+  const thisYear = String(new Date().getFullYear());
+  assert.equal(await pageA.getByLabel("Year").inputValue(), thisYear);
+  const yearLabels = await pageA.getByLabel("Year").locator("option").allTextContents();
+  assert.ok(yearLabels.includes(thisYear));
+  assert.ok(yearLabels.includes("All years"));
+  assert.equal(await pageA.getByTestId("month-total").count(), 0);
   assert.equal(await pageA.getByTestId("year-total").innerText(), "$89.50");
-  await pageA.locator("section", { has: pageA.getByRole("heading", { name: "By category" }) }).getByText("Oil change").waitFor();
+  assert.equal(await pageA.getByTestId("all-years-total").innerText(), "$89.50");
+  const byCategory = pageA.locator("section", { has: pageA.getByRole("heading", { name: "By category" }) });
+  await byCategory.getByText("Oil change").waitFor();
+  assert.equal(await byCategory.getByText("Month", { exact: true }).count(), 0);
+  await byCategory.getByText(thisYear, { exact: true }).waitFor();
+  await pageA.getByLabel("Year").selectOption({ label: "All years" });
+  assert.equal(await pageA.getByTestId("year-total").innerText(), "$89.50");
+  assert.equal(await pageA.getByTestId("all-years-total").innerText(), "$89.50");
+  await byCategory.getByText("All years", { exact: true }).waitFor();
+  await pageA.getByLabel("Year").selectOption({ label: thisYear });
   await pageA.screenshot({ path: path.join(shots, "iphone_summary_totals.png"), fullPage: true });
   await pageA.getByRole("link", { name: "More", exact: true }).click();
   await pageA.getByRole("link", { name: "All upcoming" }).click();
@@ -324,7 +338,8 @@ try {
   await pageA.getByRole("button", { name: "Sync now" }).click();
   await pageA.waitForResponse((response) => response.url().endsWith("/sync") && response.ok());
   await pageA.getByRole("link", { name: "Summary", exact: true }).click();
-  await pageA.getByTestId("month-total").getByText("$100.00").waitFor({ timeout: 10000 });
+  await pageA.getByTestId("year-total").getByText("$100.00").waitFor({ timeout: 10000 });
+  await pageA.getByTestId("all-years-total").getByText("$100.00").waitFor({ timeout: 10000 });
 
   await pageB.getByRole("link", { name: "Car", exact: true }).click();
   await pageB.getByTestId("asset-job-list").getByRole("button", { name: /Oil change/ }).click();
@@ -457,8 +472,8 @@ try {
   await pageA.getByTestId("house-month-total").getByText("$25.00").waitFor();
   await pageA.getByTestId("house-year-total").getByText("$25.00").waitFor();
   await pageA.getByRole("link", { name: "Summary", exact: true }).click();
-  assert.equal(await pageA.getByTestId("month-total").innerText(), "$65.00");
   assert.equal(await pageA.getByTestId("year-total").innerText(), "$65.00");
+  assert.equal(await pageA.getByTestId("all-years-total").innerText(), "$65.00");
 
   const pixel = await browser.newContext({ ...devices["Pixel 7"] });
   const phone = await pixel.newPage();
@@ -487,7 +502,8 @@ try {
   await assertHeadingClear(phone, "pixel car");
   await phone.screenshot({ path: path.join(shots, "pixel_car.png") });
   await phone.getByRole("link", { name: "Summary", exact: true }).click();
-  assert.equal(await phone.getByTestId("month-total").innerText(), "$65.00");
+  assert.equal(await phone.getByTestId("year-total").innerText(), "$65.00");
+  assert.equal(await phone.getByTestId("all-years-total").innerText(), "$65.00");
   await phone.screenshot({ path: path.join(shots, "pixel_summary.png") });
   await pixel.close();
 

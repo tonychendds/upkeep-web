@@ -420,6 +420,87 @@ export function upcomingItems(records, today = todayISO()) {
   return items;
 }
 
+export function summaryYearChoices(records, today = todayISO()) {
+  const years = new Set([today.slice(0, 4)]);
+  for (const job of liveJobs(records)) {
+    const date = job.payload?.date;
+    if (typeof date === "string" && /^\d{4}/.test(date)) years.add(date.slice(0, 4));
+  }
+  return [...years].sort((left, right) => right.localeCompare(left));
+}
+
+export function summarizeYear(records, year) {
+  const done = completedJobs(records);
+  const sum = (jobs) => jobs.reduce((total, job) => total + (job.payload.costCents || 0), 0);
+  const periodJobs = year === "all" ? done : done.filter((job) => job.payload.date.startsWith(year));
+  const assetIds = new Set(liveRecords(records, "asset").map((asset) => asset.id));
+  for (const job of periodJobs) assetIds.add(job.payload.assetId);
+  const assets = [...assetIds]
+    .map((id) => ({
+      id,
+      name: assetLabel(records, id),
+      assetType: assetTypeOf(records, id),
+      cents: sum(periodJobs.filter((job) => job.payload.assetId === id)),
+    }))
+    .sort((left, right) => {
+      if (left.assetType === "home" && right.assetType !== "home") return -1;
+      if (right.assetType === "home" && left.assetType !== "home") return 1;
+      return left.name.localeCompare(right.name);
+    });
+
+  const groups = new Map();
+  for (const job of periodJobs) {
+    const identity = categoryIdentity(records, job.payload.categoryId);
+    const groupKey = `${identity.side}\0${identity.key}`;
+    const existing = groups.get(groupKey);
+    if (!existing) {
+      groups.set(groupKey, { ...identity, cents: job.payload.costCents || 0 });
+      continue;
+    }
+    existing.cents += job.payload.costCents || 0;
+    if (/[A-Z]/.test(identity.name) && !/[A-Z]/.test(existing.name)) existing.name = identity.name;
+  }
+  const sharedNames = new Map();
+  for (const row of groups.values()) sharedNames.set(row.key, (sharedNames.get(row.key) || 0) + 1);
+  const categories = [...groups.values()]
+    .sort((left, right) => right.cents - left.cents || left.name.localeCompare(right.name) || sideRank(left.side) - sideRank(right.side))
+    .map((row) => ({
+      name: sharedNames.get(row.key) > 1 && row.side ? `${sideLabel(row.side)} · ${row.name}` : row.name,
+      cents: row.cents,
+    }));
+
+  return {
+    yearCents: sum(periodJobs),
+    allCents: sum(done),
+    assets,
+    categories,
+  };
+}
+
+function completedJobs(records) {
+  return liveJobs(records).filter((job) => job.payload?.status === "done" && job.payload?.date && job.payload?.costCents != null);
+}
+
+function categoryIdentity(records, id) {
+  const preset = DEFAULT_CATEGORIES.find((category) => category.id === id);
+  const source = preset || records[id]?.payload || {};
+  const name = String(categoryLabel(records, id) || "").trim().replace(/\s+/g, " ");
+  const side = source.assetType === "car" || source.assetType === "home" ? source.assetType : "";
+  return { name, key: name.toLowerCase(), side };
+}
+
+function sideLabel(side) {
+  if (side === "car") return "Car";
+  if (side === "home") return "House";
+  return "";
+}
+
+function sideRank(side) {
+  if (side === "home") return 0;
+  if (side === "car") return 1;
+  return 2;
+}
+
 export function summarize(records, month) {
   const year = month.slice(0, 4);
   const done = liveJobs(records).filter((job) => job.payload?.status === "done" && job.payload?.date && job.payload?.costCents != null);
