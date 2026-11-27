@@ -263,7 +263,7 @@ h2 { font-size: 22px; }
 
 .rowline {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px 12px;
   align-items: baseline;
   padding: 8px 0;
@@ -552,7 +552,7 @@ dialog.modal::backdrop { background: rgba(36, 28, 20, 0.45); }
 
 .dialog-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 
-.month input { max-width: 220px; }
+.year select { max-width: 220px; }
 
 @media (min-width: 720px) {
   .figures, .split, .filters { grid-template-columns: 1fr 1fr; }

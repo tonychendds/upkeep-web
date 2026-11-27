@@ -14,6 +14,8 @@ import {
   seedHome,
   suggestNextDue,
   summarize,
+  summarizeYear,
+  summaryYearChoices,
   toCsv,
   upcomingItems,
 } from "../site/js/model.js";
@@ -92,6 +94,41 @@ test("totals ignore scheduled jobs and upcoming marks overdue dates", () => {
   const csv = toCsv(records);
   assert.match(csv, /License plate/);
   assert.match(csv, /Oil change/);
+});
+
+test("summary years keep completed totals and split Other by house and car", () => {
+  const records = {
+    home: seedHome(),
+    car: {
+      id: "car-1",
+      type: "asset",
+      updatedAt: 2,
+      deleted: false,
+      payload: normalizeAssetPayload({ assetType: "car", make: "Lexus", model: "RX", year: "2019", plate: "8ABC123", vin: "", nickname: "" }),
+    },
+    "custom-other": { id: "custom-other", type: "category", updatedAt: 3, deleted: false, payload: { name: " other ", assetType: "car" } },
+    oil: job("oil", "2026-10-02", 8000, { assetId: "car-1", categoryId: "default:car:oil-change" }),
+    carOther: job("car-other", "2025-03-01", 2000, { assetId: "car-1", categoryId: "default:car:other" }),
+    homeOther: job("home-other", "2025-04-01", 3000, { assetId: "asset:home", categoryId: "default:home:other" }),
+    spaced: job("spaced", "2025-05-01", 100, { assetId: "car-1", categoryId: "custom-other" }),
+    later: job("later", "2024-01-01", 9000, { status: "scheduled", categoryId: "default:home:other" }),
+  };
+  assert.deepEqual(summaryYearChoices(records, "2026-11-27"), ["2026", "2025", "2024"]);
+  const year = summarizeYear(records, "2026");
+  assert.equal(year.yearCents, 8000);
+  assert.equal(year.allCents, 13100);
+  assert.equal(year.assets.find((asset) => asset.id === "asset:home").cents, 0);
+  const older = summarizeYear(records, "2025");
+  assert.equal(older.categories.find((row) => row.name === "House · Other").cents, 3000);
+  assert.equal(older.categories.find((row) => row.name === "Car · Other").cents, 2100);
+  assert.equal(older.categories.filter((row) => row.name === "Other").length, 0);
+  const alone = summarizeYear({
+    home: seedHome(),
+    only: job("only", "2026-02-02", 500, { categoryId: "default:home:other" }),
+  }, "2026");
+  assert.equal(alone.categories[0].name, "Other");
+  assert.equal(summarizeYear(records, "all").yearCents, 13100);
+  assert.equal(summarizeYear(records, "all").allCents, 13100);
 });
 
 test("jobs can reference receipt photos by id without storing the image", () => {

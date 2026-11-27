@@ -25,6 +25,8 @@ import {
   recordError,
   repeatPresets,
   summarize,
+  summarizeYear,
+  summaryYearChoices,
   suggestNextDue,
   toCsv,
   todayISO,
@@ -39,7 +41,7 @@ import { confirmPasswordReset, fetchAccount, loginAccount, logoutAccount, regist
 const FORM_ROUTES = new Set(["job", "asset", "contractor"]);
 const jobsFilter = { query: "", assetId: "", status: "", categoryId: "" };
 const assetJobFilters = new Map();
-let summaryMonth = currentMonth();
+let summaryYear = todayISO().slice(0, 4);
 let accountMode = "signin";
 
 export function mountApp(root, { state, sync, syncUrl }) {
@@ -160,23 +162,31 @@ export function mountApp(root, { state, sync, syncUrl }) {
   }
 
   function renderSummary() {
-    const totals = summarize(state.records, summaryMonth);
-    const monthInput = el("input", { id: "summary-month", type: "month", value: summaryMonth });
-    monthInput.addEventListener("change", () => {
-      if (monthInput.value) summaryMonth = monthInput.value;
+    const choices = summaryYearChoices(state.records);
+    if (summaryYear !== "all" && !choices.includes(summaryYear)) summaryYear = todayISO().slice(0, 4);
+    const totals = summarizeYear(state.records, summaryYear);
+    const yearSelect = selectFrom(
+      [...choices.map((year) => [year, year]), ["all", "All years"]],
+      summaryYear,
+    );
+    yearSelect.id = "summary-year";
+    yearSelect.setAttribute("data-testid", "summary-year");
+    yearSelect.addEventListener("change", () => {
+      summaryYear = yearSelect.value || todayISO().slice(0, 4);
       renderMain();
     });
+    const periodLabel = summaryYear === "all" ? "All years" : summaryYear;
     return wrap([
       el("h1", {}, ["Summary"]),
       el("p", { class: "lede" }, ["Totals count completed jobs only. Scheduled work is not included."]),
-      el("div", { class: "field month" }, [el("label", { for: "summary-month" }, ["Month"]), monthInput]),
+      el("div", { class: "field year" }, [el("label", { for: "summary-year" }, ["Year"]), yearSelect]),
       el("div", { class: "figures compact" }, [
-        figure(formatMonth(summaryMonth), formatMoney(totals.monthCents), "month-total"),
-        figure(summaryMonth.slice(0, 4), formatMoney(totals.yearCents), "year-total"),
+        figure(periodLabel, formatMoney(totals.yearCents), "year-total"),
+        figure("All years", formatMoney(totals.allCents), "all-years-total"),
       ]),
       summaryUpcoming(),
-      breakdown("By asset", totals.assets, "No assets yet.", true),
-      breakdown("By category", totals.categories, "No completed jobs in this year.", true),
+      breakdown("By asset", totals.assets, "No assets yet.", true, periodLabel),
+      breakdown("By category", totals.categories, summaryYear === "all" ? "No completed jobs yet." : "No completed jobs in this year.", true, periodLabel),
       el("a", { class: "button", href: "#/jobs/new" }, [icon("plus"), "Log a job"]),
     ]);
   }
@@ -1588,18 +1598,16 @@ function figure(label, value, testid) {
   ]);
 }
 
-function breakdown(title, rows, empty, compact = false) {
+function breakdown(title, rows, empty, compact = false, amountHeader = "Year") {
   const body = rows.length
     ? [
       el("div", { class: "rowline head" }, [
         el("span", {}, [""]),
-        el("span", { class: "meta" }, ["Month"]),
-        el("span", { class: "meta" }, ["Year"]),
+        el("span", { class: "meta" }, [amountHeader]),
       ]),
       ...rows.map((row) => el("div", { class: "rowline" }, [
         el("span", {}, [row.name]),
-        el("strong", {}, [formatMoney(row.monthCents)]),
-        el("strong", {}, [formatMoney(row.yearCents)]),
+        el("strong", {}, [formatMoney(row.cents)]),
       ])),
     ]
     : [el("p", { class: "lede" }, [empty])];
